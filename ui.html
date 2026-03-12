@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GhostPilot</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0a; color: #e0e0e0; font-family: 'SF Mono', 'Cascadia Code', monospace; overflow: hidden; height: 100vh; }
+
+  .layout { display: grid; grid-template-columns: 1fr 300px; grid-template-rows: 40px 1fr; height: 100vh; }
+
+  .header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; background: #111; border-bottom: 1px solid #00ff0033; }
+  .header h1 { font-size: 13px; font-weight: 600; color: #00ff00; }
+  .header h1 span { color: #555; font-weight: 400; font-size: 11px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #666; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #333; }
+  .dot.on { background: #00ff00; box-shadow: 0 0 4px #00ff0080; }
+
+  /* Browser — fills entire left panel */
+  .browser { position: relative; background: #000; overflow: hidden; }
+  .browser img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: default; }
+  .no-browser { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #333; font-size: 14px; }
+  .coords { position: absolute; bottom: 4px; left: 4px; background: #000b; padding: 1px 6px; border-radius: 3px; font-size: 10px; color: #555; pointer-events: none; }
+
+  /* Side Panel */
+  .side { display: flex; flex-direction: column; background: #0c0c0c; border-left: 1px solid #1a1a1a; }
+  .url-bar { display: flex; gap: 4px; padding: 6px; border-bottom: 1px solid #1a1a1a; }
+  .url-bar input { flex: 1; background: #111; border: 1px solid #222; border-radius: 4px; padding: 5px 8px; color: #ccc; font-size: 11px; font-family: inherit; outline: none; }
+  .url-bar input:focus { border-color: #00ff0044; }
+  .url-bar button { background: #00ff0012; border: 1px solid #00ff0033; color: #00ff00; border-radius: 4px; padding: 5px 10px; font-size: 10px; cursor: pointer; font-family: inherit; }
+
+  .log { flex: 1; overflow-y: auto; padding: 4px 6px; font-size: 10px; }
+  .log::-webkit-scrollbar { width: 3px; }
+  .log::-webkit-scrollbar-thumb { background: #222; }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #0a0a0a; }
+  .log-ts { color: #333; }
+  .log-act { color: #00ff00; font-weight: 600; }
+  .log-det { color: #666; }
+
+  .input-bar { padding: 6px; border-top: 1px solid #1a1a1a; display: flex; gap: 4px; }
+  .input-bar input { flex: 1; background: #111; border: 1px solid #222; border-radius: 4px; padding: 5px 8px; color: #ccc; font-size: 11px; font-family: inherit; outline: none; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="header">
+    <h1>GHOSTPILOT <span>shared browser</span></h1>
+    <div class="status">
+      <div class="dot" id="dot"></div>
+      <span id="stat">offline</span>
+      <span style="color:#222">|</span>
+      <span id="urlDisplay" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
+    </div>
+  </div>
+
+  <div class="browser" id="bp">
+    <img id="frame" style="display:none" />
+    <div class="no-browser" id="noB">Enter URL or POST /api/launch</div>
+    <div class="coords" id="coords"></div>
+  </div>
+
+  <div class="side">
+    <div class="url-bar">
+      <input id="urlIn" placeholder="https://chat-dev.agenticwork.io" onkeydown="if(event.key==='Enter')go()" />
+      <button onclick="go()">Go</button>
+    </div>
+    <div class="log" id="logP"></div>
+    <div class="input-bar">
+      <input id="typeIn" placeholder="Type here, press Enter to send" onkeydown="if(event.key==='Enter'){sendT();event.preventDefault()}" />
+    </div>
+  </div>
+</div>
+
+<script>
+const frame = document.getElementById('frame');
+const noB = document.getElementById('noB');
+const logP = document.getElementById('logP');
+const bp = document.getElementById('bp');
+const coordsEl = document.getElementById('coords');
+let ws, natW = 1440, natH = 900;
+
+function connect() {
+  const p = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${p}://${location.host}/ws`);
+  ws.onopen = () => { document.getElementById('dot').classList.add('on'); document.getElementById('stat').textContent = 'live'; };
+  ws.onclose = () => { document.getElementById('dot').classList.remove('on'); document.getElementById('stat').textContent = 'offline'; setTimeout(connect, 1500); };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'frame') {
+      frame.src = 'data:image/jpeg;base64,' + m.data;
+      frame.style.display = 'block';
+      noB.style.display = 'none';
+      frame.onload = () => { natW = frame.naturalWidth; natH = frame.naturalHeight; };
+    } else if (m.type === 'action') {
+      addLog(m);
+    } else if (m.type === 'log') {
+      m.entries.forEach(addLog);
+    }
+  };
+}
+
+function addLog(e) {
+  const d = document.createElement('div');
+  d.className = 'log-entry';
+  const t = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+  d.innerHTML = `<span class="log-ts">${t}</span> <span class="log-act">${e.action||''}</span> <span class="log-det">${e.detail||''}</span>`;
+  logP.appendChild(d);
+  logP.scrollTop = logP.scrollHeight;
+  if (e.action === 'goto' || e.action === 'page-load') {
+    document.getElementById('urlDisplay').textContent = e.detail?.substring(0, 60);
+  }
+}
+
+// Map pixel coords on rendered image → actual page coords
+function px(e) {
+  const r = frame.getBoundingClientRect();
+  // The image is object-fit:contain — find actual rendered area
+  const imgAspect = natW / natH;
+  const boxAspect = r.width / r.height;
+  let renderW, renderH, offsetX, offsetY;
+  if (imgAspect > boxAspect) {
+    renderW = r.width;
+    renderH = r.width / imgAspect;
+    offsetX = 0;
+    offsetY = (r.height - renderH) / 2;
+  } else {
+    renderH = r.height;
+    renderW = r.height * imgAspect;
+    offsetX = (r.width - renderW) / 2;
+    offsetY = 0;
+  }
+  const relX = e.clientX - r.left - offsetX;
+  const relY = e.clientY - r.top - offsetY;
+  return { x: Math.round(relX / renderW * natW), y: Math.round(relY / renderH * natH) };
+}
+
+// All mouse events go through to the browser
+frame.addEventListener('click', (e) => {
+  const c = px(e);
+  if (c.x < 0 || c.y < 0 || c.x > natW || c.y > natH) return;
+  ws?.send(JSON.stringify({ type: 'click', x: c.x, y: c.y }));
+});
+
+frame.addEventListener('mousemove', (e) => {
+  const c = px(e);
+  coordsEl.textContent = `${c.x}, ${c.y}`;
+  // Send mousemove for hover effects (throttled)
+  if (!frame._lastMove || Date.now() - frame._lastMove > 50) {
+    frame._lastMove = Date.now();
+    ws?.send(JSON.stringify({ type: 'mousemove', x: c.x, y: c.y }));
+  }
+});
+
+// Scroll passthrough
+frame.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  ws?.send(JSON.stringify({ type: 'scroll', dy: Math.round(e.deltaY) }));
+}, { passive: false });
+
+// Keyboard passthrough when not in an input
+document.addEventListener('keydown', (e) => {
+  if (document.activeElement.tagName === 'INPUT') return;
+  e.preventDefault();
+  const key = e.key === ' ' ? 'Space' : e.key;
+  ws?.send(JSON.stringify({ type: 'key', key }));
+});
+
+function go() {
+  let u = document.getElementById('urlIn').value.trim();
+  if (!u) return;
+  if (!u.startsWith('http')) u = 'https://' + u;
+  fetch('/api/launch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u }) });
+}
+
+function sendT() {
+  const inp = document.getElementById('typeIn');
+  if (!inp.value) return;
+  ws?.send(JSON.stringify({ type: 'type', text: inp.value }));
+  inp.value = '';
+}
+
+connect();
+</script>
+</body>
+</html>
