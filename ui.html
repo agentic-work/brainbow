@@ -6,29 +6,89 @@
 <title>GhostPilot</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #0a0a0a; color: #e0e0e0; font-family: 'SF Mono', 'Cascadia Code', monospace; overflow: hidden; height: 100vh; }
+  html, body { background: #0a0a0a; color: #e0e0e0; font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace; overflow: hidden; height: 100vh; position: fixed; width: 100%; }
 
-  .layout { display: grid; grid-template-columns: 1fr 300px; grid-template-rows: 40px 1fr; height: 100vh; }
+  .layout { display: grid; grid-template-columns: 1fr 300px; grid-template-rows: 40px 1fr; height: 100vh; overflow: hidden; }
 
-  .header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; background: #111; border-bottom: 1px solid #00ff0033; }
-  .header h1 { font-size: 13px; font-weight: 600; color: #00ff00; }
+  .header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; background: #111; border-bottom: 1px solid #00ff0033; gap: 8px; }
+  .header h1 { font-size: 13px; font-weight: 600; color: #00ff00; white-space: nowrap; }
   .header h1 span { color: #555; font-weight: 400; font-size: 11px; }
+
+  .toolbar { display: flex; align-items: center; gap: 6px; }
+  .toolbar button {
+    background: #1a1a1a; border: 1px solid #333; color: #ccc; border-radius: 4px;
+    padding: 4px 10px; font-size: 10px; cursor: pointer; font-family: inherit;
+    display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .toolbar button:hover { background: #252525; border-color: #555; }
+  .toolbar button.active { background: #ff000022; border-color: #ff0000; color: #ff4444; }
+  .toolbar button.recording { animation: pulse-red 1s infinite; }
+  @keyframes pulse-red {
+    0%, 100% { box-shadow: 0 0 0 0 #ff000044; }
+    50% { box-shadow: 0 0 8px 2px #ff000066; }
+  }
+  .toolbar .sep { width: 1px; height: 20px; background: #333; }
+
   .status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #666; }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: #333; }
   .dot.on { background: #00ff00; box-shadow: 0 0 4px #00ff0080; }
+  .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff0000; display: inline-block; }
 
   /* Browser — fills entire left panel */
   .browser { position: relative; background: #000; overflow: hidden; }
   .browser img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: default; }
-  .no-browser { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #333; font-size: 14px; }
+  .no-browser { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #333; font-size: 14px; flex-direction: column; gap: 8px; }
+  .no-browser code { color: #00ff0066; font-size: 11px; }
   .coords { position: absolute; bottom: 4px; left: 4px; background: #000b; padding: 1px 6px; border-radius: 3px; font-size: 10px; color: #555; pointer-events: none; }
 
-  /* Side Panel */
-  .side { display: flex; flex-direction: column; background: #0c0c0c; border-left: 1px solid #1a1a1a; }
+  /* Recording overlay */
+  .rec-badge {
+    position: absolute; top: 8px; left: 8px; background: #ff0000cc; color: #fff;
+    padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;
+    display: none; align-items: center; gap: 6px; pointer-events: none;
+    animation: pulse-red 1s infinite;
+  }
+  .rec-badge.show { display: flex; }
+
+  /* Zoom selection overlay */
+  .zoom-overlay {
+    position: absolute; border: 2px dashed #ff880088; background: #ff880011;
+    pointer-events: none; display: none; z-index: 10;
+  }
+  .zoom-overlay.show { display: block; }
+
+  /* HITL Modal — floating over browser panel */
+  .hitl-modal {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: #1a1a1a; border: 2px solid #ff8800; border-radius: 8px;
+    padding: 16px; z-index: 100; min-width: 350px; max-width: 500px;
+    box-shadow: 0 8px 32px #000a; display: none;
+  }
+  .hitl-modal.show { display: block; }
+  .hitl-modal h3 { color: #ff8800; font-size: 13px; margin-bottom: 8px; }
+  .hitl-modal p { color: #aaa; font-size: 11px; margin-bottom: 10px; }
+  .hitl-modal input, .hitl-modal textarea {
+    width: 100%; background: #111; border: 1px solid #333; border-radius: 4px;
+    padding: 8px; color: #fff; font-size: 12px; font-family: inherit; outline: none;
+  }
+  .hitl-modal input:focus, .hitl-modal textarea:focus { border-color: #ff8800; }
+  .hitl-modal .hitl-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+  .hitl-modal button {
+    padding: 6px 14px; border-radius: 4px; font-size: 11px; cursor: pointer; font-family: inherit; border: 1px solid;
+  }
+  .hitl-modal .hitl-submit { background: #ff880022; border-color: #ff8800; color: #ff8800; }
+  .hitl-modal .hitl-cancel { background: #1a1a1a; border-color: #444; color: #888; }
+
+  /* Side Panel — contained, never pushes layout */
+  .side { display: flex; flex-direction: column; background: #0c0c0c; border-left: 1px solid #1a1a1a; overflow: hidden; min-height: 0; }
   .url-bar { display: flex; gap: 4px; padding: 6px; border-bottom: 1px solid #1a1a1a; }
-  .url-bar input { flex: 1; background: #111; border: 1px solid #222; border-radius: 4px; padding: 5px 8px; color: #ccc; font-size: 11px; font-family: inherit; outline: none; }
+  .url-bar input { flex: 1; background: #111; border: 1px solid #222; border-radius: 4px; padding: 5px 8px; color: #ccc; font-size: 11px; font-family: inherit; outline: none; min-width: 0; }
   .url-bar input:focus { border-color: #00ff0044; }
-  .url-bar button { background: #00ff0012; border: 1px solid #00ff0033; color: #00ff00; border-radius: 4px; padding: 5px 10px; font-size: 10px; cursor: pointer; font-family: inherit; }
+  .url-bar button { background: #00ff0012; border: 1px solid #00ff0033; color: #00ff00; border-radius: 4px; padding: 5px 8px; font-size: 10px; cursor: pointer; font-family: inherit; white-space: nowrap; }
+  .url-bar button:hover { background: #00ff0022; }
+  .url-bar button.reload { background: #ff880012; border-color: #ff880033; color: #ff8800; }
+  .url-bar button.reload:hover { background: #ff880022; }
 
   .log { flex: 1; overflow-y: auto; padding: 4px 6px; font-size: 10px; }
   .log::-webkit-scrollbar { width: 3px; }
@@ -36,38 +96,78 @@
   .log-entry { padding: 2px 0; border-bottom: 1px solid #0a0a0a; }
   .log-ts { color: #333; }
   .log-act { color: #00ff00; font-weight: 600; }
+  .log-act.rec { color: #ff4444; }
   .log-det { color: #666; }
 
   .input-bar { padding: 6px; border-top: 1px solid #1a1a1a; display: flex; gap: 4px; }
   .input-bar input { flex: 1; background: #111; border: 1px solid #222; border-radius: 4px; padding: 5px 8px; color: #ccc; font-size: 11px; font-family: inherit; outline: none; }
+
+  /* Recordings panel */
+  .recordings-panel { padding: 6px; border-top: 1px solid #1a1a1a; max-height: 150px; overflow-y: auto; }
+  .recordings-panel h3 { font-size: 10px; color: #555; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+  .rec-item { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 10px; border-bottom: 1px solid #111; }
+  .rec-item a { color: #00aaff; text-decoration: none; }
+  .rec-item a:hover { text-decoration: underline; }
+  .rec-item .size { color: #444; }
 </style>
 </head>
 <body>
 <div class="layout">
   <div class="header">
-    <h1>GHOSTPILOT <span>shared browser</span></h1>
+    <h1><img src="/ghostpilot_logo.png" alt="GhostPilot" style="height: 34px; vertical-align: middle; margin-right: 6px;" /><span>v2.0 — recording studio</span></h1>
+    <div class="toolbar">
+      <button onclick="toggleRecord()" id="recBtn" title="Start/Stop Recording">
+        <span class="rec-dot" style="display:none" id="recDotBtn"></span>
+        <span id="recLabel">REC</span>
+      </button>
+      <button onclick="toggleZoomSelect()" id="zoomBtn" title="Select zoom region for recording">ZOOM</button>
+      <button onclick="clearZoom()" id="clearZoomBtn" title="Reset zoom to full viewport" style="display:none">FULL</button>
+      <div class="sep"></div>
+      <button onclick="hardReload()" title="Hard reload (bypass cache)">HARD RELOAD</button>
+      <div class="sep"></div>
+      <span id="recTimer" style="font-size:10px;color:#ff4444;display:none">00:00</span>
+    </div>
     <div class="status">
       <div class="dot" id="dot"></div>
       <span id="stat">offline</span>
       <span style="color:#222">|</span>
-      <span id="urlDisplay" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
+      <span id="urlDisplay" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
     </div>
   </div>
 
   <div class="browser" id="bp">
     <img id="frame" style="display:none" />
-    <div class="no-browser" id="noB">Enter URL or POST /api/launch</div>
+    <div class="no-browser" id="noB">
+      Enter URL or call the API
+      <code>POST /api/launch {"url":"https://..."}</code>
+    </div>
     <div class="coords" id="coords"></div>
+    <div class="rec-badge" id="recBadge"><span class="rec-dot"></span> REC <span id="recBadgeTime">00:00</span></div>
+    <div class="zoom-overlay" id="zoomOverlay"></div>
+    <div class="hitl-modal" id="hitlModal">
+      <h3>Input Required</h3>
+      <p id="hitlPrompt">The automation needs your input to continue.</p>
+      <input type="text" id="hitlInput" placeholder="Enter value..." />
+      <div class="hitl-actions">
+        <button class="hitl-cancel" onclick="cancelHitl()">Cancel</button>
+        <button class="hitl-submit" onclick="submitHitl()">Submit</button>
+      </div>
+    </div>
   </div>
 
   <div class="side">
     <div class="url-bar">
-      <input id="urlIn" placeholder="https://chat-dev.agenticwork.io" onkeydown="if(event.key==='Enter')go()" />
+      <input id="urlIn" placeholder="https://..." onkeydown="if(event.key==='Enter')go()" />
       <button onclick="go()">Go</button>
+      <button class="reload" onclick="hardReload()" title="Hard reload (no cache)">⟳</button>
     </div>
     <div class="log" id="logP"></div>
+    <div class="recordings-panel" id="recPanel">
+      <h3>Recordings</h3>
+      <div id="recList"><span style="color:#333;font-size:10px">No recordings yet</span></div>
+    </div>
     <div class="input-bar">
-      <input id="typeIn" placeholder="Type here, press Enter to send" onkeydown="if(event.key==='Enter'){sendT();event.preventDefault()}" />
+      <input id="typeIn" placeholder="Type text, press Enter" onkeydown="if(event.key==='Enter'){sendT();event.preventDefault()}" />
     </div>
   </div>
 </div>
@@ -78,8 +178,64 @@ const noB = document.getElementById('noB');
 const logP = document.getElementById('logP');
 const bp = document.getElementById('bp');
 const coordsEl = document.getElementById('coords');
-let ws, natW = 1440, natH = 900;
+const recBadge = document.getElementById('recBadge');
+const recBadgeTime = document.getElementById('recBadgeTime');
+const recBtn = document.getElementById('recBtn');
+const recLabel = document.getElementById('recLabel');
+const recDotBtn = document.getElementById('recDotBtn');
+const recTimer = document.getElementById('recTimer');
+const zoomOverlay = document.getElementById('zoomOverlay');
+const zoomBtn = document.getElementById('zoomBtn');
+const clearZoomBtn = document.getElementById('clearZoomBtn');
+const recList = document.getElementById('recList');
 
+let ws, natW = 1440, natH = 900;
+let isRecording = false;
+let recStart = 0;
+let recTimerInterval = null;
+let zoomSelecting = false;
+let zoomStart = null;
+let currentZoom = null;
+
+// ─── Secret Redaction ───────────────────────────────────────────────────
+const SECRET_PATTERNS = [
+  // Passwords in form fields, URLs, JSON
+  /(?:password|passwd|pwd|pass|secret|token|api[_-]?key|auth|bearer|credential|ssn|dob|birth)[\s]*[=:]["']?\s*\S+/gi,
+  // Bearer tokens
+  /Bearer\s+[A-Za-z0-9._\-]+/gi,
+  // API keys (common patterns)
+  /(?:awc_|sk-|pk-|ghp_|gho_|github_pat_|xox[bpars]-)[A-Za-z0-9_\-]{10,}/g,
+  // JWT tokens
+  /eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}/g,
+  // Email addresses (PII)
+  /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g,
+  // SSN patterns
+  /\b\d{3}[-]?\d{2}[-]?\d{4}\b/g,
+  // Credit card patterns
+  /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/g,
+  // Azure/AWS/GCP secrets
+  /(?:client[_-]?secret|access[_-]?key|secret[_-]?key)[\s]*[=:]["']?\s*\S+/gi,
+  // Connection strings with passwords
+  /(?:password|pwd)=[^&;\s"']+/gi,
+];
+
+function redact(text) {
+  if (!text) return text;
+  let result = text;
+  for (const pattern of SECRET_PATTERNS) {
+    result = result.replace(pattern, (match) => {
+      // Keep the key/label part, redact the value
+      const eqIdx = match.search(/[=:]\s*/);
+      if (eqIdx > 0) return match.substring(0, eqIdx + 1) + '••••••';
+      // For standalone tokens, show first 4 chars
+      if (match.length > 8) return match.substring(0, 4) + '••••••';
+      return '••••••';
+    });
+  }
+  return result;
+}
+
+// ─── WebSocket ──────────────────────────────────────────────────────────
 function connect() {
   const p = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${p}://${location.host}/ws`);
@@ -96,6 +252,14 @@ function connect() {
       addLog(m);
     } else if (m.type === 'log') {
       m.entries.forEach(addLog);
+    } else if (m.type === 'recording') {
+      handleRecState(m);
+    } else if (m.type === 'dialog') {
+      addLog({ action: 'dialog', detail: `${m.dialogType}: ${m.message}`, ts: new Date().toISOString() });
+    } else if (m.type === 'hitl_request') {
+      showHitl(m.prompt, m.inputType, m.id);
+    } else if (m.type === 'hitl_resolved' || m.type === 'hitl_cancelled') {
+      hideHitl();
     }
   };
 }
@@ -104,18 +268,199 @@ function addLog(e) {
   const d = document.createElement('div');
   d.className = 'log-entry';
   const t = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
-  d.innerHTML = `<span class="log-ts">${t}</span> <span class="log-act">${e.action||''}</span> <span class="log-det">${e.detail||''}</span>`;
+  const isRec = e.action?.startsWith('record');
+  const safeDetail = redact(e.detail || '');
+  d.innerHTML = `<span class="log-ts">${t}</span> <span class="log-act${isRec ? ' rec' : ''}">${e.action || ''}</span> <span class="log-det">${safeDetail}</span>`;
   logP.appendChild(d);
   logP.scrollTop = logP.scrollHeight;
   if (e.action === 'goto' || e.action === 'page-load') {
     document.getElementById('urlDisplay').textContent = e.detail?.substring(0, 60);
+    document.getElementById('urlIn').value = e.detail || '';
   }
 }
 
-// Map pixel coords on rendered image → actual page coords
+// ─── Recording State ────────────────────────────────────────────────────
+function handleRecState(m) {
+  if (m.state === 'started') {
+    isRecording = true;
+    recStart = Date.now();
+    recBadge.classList.add('show');
+    recBtn.classList.add('recording');
+    recDotBtn.style.display = 'inline-block';
+    recLabel.textContent = 'STOP';
+    recTimer.style.display = 'inline';
+    recTimerInterval = setInterval(updateRecTimer, 500);
+  } else if (m.state === 'encoding') {
+    recBadge.querySelector('span:last-child').textContent = `encoding ${m.format}...`;
+  } else if (m.state === 'done' || m.state === 'stopped' || m.state === 'error') {
+    isRecording = false;
+    recBadge.classList.remove('show');
+    recBtn.classList.remove('recording');
+    recDotBtn.style.display = 'none';
+    recLabel.textContent = 'REC';
+    recTimer.style.display = 'none';
+    if (recTimerInterval) { clearInterval(recTimerInterval); recTimerInterval = null; }
+    if (m.state === 'done') loadRecordings();
+  } else if (m.state === 'zoom') {
+    currentZoom = m.zoom;
+    if (m.zoom) {
+      clearZoomBtn.style.display = '';
+      zoomBtn.classList.add('active');
+    } else {
+      clearZoomBtn.style.display = 'none';
+      zoomBtn.classList.remove('active');
+    }
+  }
+}
+
+function updateRecTimer() {
+  const elapsed = Math.floor((Date.now() - recStart) / 1000);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  recTimer.textContent = `${mm}:${ss}`;
+  recBadgeTime.textContent = `${mm}:${ss}`;
+}
+
+async function toggleRecord() {
+  if (isRecording) {
+    // Stop — show format picker (default GIF)
+    const format = prompt('Output format: gif, mp4, webm', 'gif') || 'gif';
+    const resp = await fetch('/api/record/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format, quality: 'high' }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      addLog({ action: 'record-saved', detail: `${result.sizeHuman} ${result.format} — ${result.url}`, ts: new Date().toISOString() });
+    }
+  } else {
+    // Start
+    await fetch('/api/record/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zoom: currentZoom }),
+    });
+  }
+}
+
+// ─── Zoom Selection ─────────────────────────────────────────────────────
+function toggleZoomSelect() {
+  zoomSelecting = !zoomSelecting;
+  if (zoomSelecting) {
+    zoomBtn.classList.add('active');
+    frame.style.cursor = 'crosshair';
+    addLog({ action: 'zoom-select', detail: 'Click and drag on the browser to select zoom region', ts: new Date().toISOString() });
+  } else {
+    zoomBtn.classList.remove('active');
+    frame.style.cursor = 'default';
+  }
+}
+
+function clearZoom() {
+  currentZoom = null;
+  zoomOverlay.classList.remove('show');
+  clearZoomBtn.style.display = 'none';
+  zoomBtn.classList.remove('active');
+  fetch('/api/record/zoom', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reset: true }),
+  });
+}
+
+frame.addEventListener('mousedown', (e) => {
+  if (!zoomSelecting) return;
+  e.preventDefault();
+  zoomStart = px(e);
+  zoomOverlay.style.left = `${e.clientX - bp.getBoundingClientRect().left}px`;
+  zoomOverlay.style.top = `${e.clientY - bp.getBoundingClientRect().top}px`;
+  zoomOverlay.style.width = '0';
+  zoomOverlay.style.height = '0';
+  zoomOverlay.classList.add('show');
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!zoomSelecting || !zoomStart) return;
+  const bpRect = bp.getBoundingClientRect();
+  const startX = zoomOverlay.offsetLeft;
+  const startY = zoomOverlay.offsetTop;
+  const curX = e.clientX - bpRect.left;
+  const curY = e.clientY - bpRect.top;
+  zoomOverlay.style.left = `${Math.min(startX, curX)}px`;
+  zoomOverlay.style.top = `${Math.min(startY, curY)}px`;
+  zoomOverlay.style.width = `${Math.abs(curX - startX)}px`;
+  zoomOverlay.style.height = `${Math.abs(curY - startY)}px`;
+});
+
+document.addEventListener('mouseup', async (e) => {
+  if (!zoomSelecting || !zoomStart) return;
+  const zoomEnd = px(e);
+  zoomSelecting = false;
+  frame.style.cursor = 'default';
+
+  const x = Math.min(zoomStart.x, zoomEnd.x);
+  const y = Math.min(zoomStart.y, zoomEnd.y);
+  const width = Math.abs(zoomEnd.x - zoomStart.x);
+  const height = Math.abs(zoomEnd.y - zoomStart.y);
+  zoomStart = null;
+
+  if (width < 20 || height < 20) {
+    zoomOverlay.classList.remove('show');
+    return;
+  }
+
+  currentZoom = { x, y, width, height };
+  clearZoomBtn.style.display = '';
+
+  await fetch('/api/record/zoom', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(currentZoom),
+  });
+
+  addLog({ action: 'zoom-set', detail: `${x},${y} ${width}x${height}`, ts: new Date().toISOString() });
+});
+
+// ─── Recordings List ────────────────────────────────────────────────────
+async function loadRecordings() {
+  try {
+    const resp = await fetch('/api/recordings');
+    const data = await resp.json();
+    if (data.recordings.length === 0) {
+      recList.innerHTML = '<span style="color:#333;font-size:10px">No recordings yet</span>';
+      return;
+    }
+    recList.innerHTML = data.recordings.slice(0, 10).map(r =>
+      `<div class="rec-item">
+        <a href="/api/recordings/${r.name}" target="_blank">${r.name}</a>
+        <span class="size">${r.sizeHuman || humanSize(r.size)}</span>
+      </div>`
+    ).join('');
+  } catch {}
+}
+
+function humanSize(b) {
+  if (b > 1048576) return (b / 1048576).toFixed(1) + 'MB';
+  return Math.round(b / 1024) + 'KB';
+}
+
+// ─── Hard Reload ────────────────────────────────────────────────────────
+async function hardReload() {
+  try {
+    await fetch('/api/reload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noCache: true }),
+    });
+  } catch (e) {
+    addLog({ action: 'error', detail: 'Hard reload failed: ' + e.message, ts: new Date().toISOString() });
+  }
+}
+
+// ─── Coordinate Mapping ─────────────────────────────────────────────────
 function px(e) {
   const r = frame.getBoundingClientRect();
-  // The image is object-fit:contain — find actual rendered area
   const imgAspect = natW / natH;
   const boxAspect = r.width / r.height;
   let renderW, renderH, offsetX, offsetY;
@@ -135,8 +480,9 @@ function px(e) {
   return { x: Math.round(relX / renderW * natW), y: Math.round(relY / renderH * natH) };
 }
 
-// All mouse events go through to the browser
+// ─── Mouse/Keyboard Passthrough ─────────────────────────────────────────
 frame.addEventListener('click', (e) => {
+  if (zoomSelecting) return; // handled by zoom selection
   const c = px(e);
   if (c.x < 0 || c.y < 0 || c.x > natW || c.y > natH) return;
   ws?.send(JSON.stringify({ type: 'click', x: c.x, y: c.y }));
@@ -145,27 +491,50 @@ frame.addEventListener('click', (e) => {
 frame.addEventListener('mousemove', (e) => {
   const c = px(e);
   coordsEl.textContent = `${c.x}, ${c.y}`;
-  // Send mousemove for hover effects (throttled)
   if (!frame._lastMove || Date.now() - frame._lastMove > 50) {
     frame._lastMove = Date.now();
     ws?.send(JSON.stringify({ type: 'mousemove', x: c.x, y: c.y }));
   }
 });
 
-// Scroll passthrough
 frame.addEventListener('wheel', (e) => {
   e.preventDefault();
   ws?.send(JSON.stringify({ type: 'scroll', dy: Math.round(e.deltaY) }));
 }, { passive: false });
 
-// Keyboard passthrough when not in an input
 document.addEventListener('keydown', (e) => {
-  if (document.activeElement.tagName === 'INPUT') return;
+  if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+  // Don't send keys when HITL modal is open
+  if (hitlModal.classList.contains('show')) return;
+
+  // Intercept Ctrl+V / Cmd+V — read clipboard and send as type command
+  if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    e.preventDefault();
+    navigator.clipboard.readText().then(text => {
+      if (text) ws?.send(JSON.stringify({ type: 'type', text }));
+    }).catch(() => {});
+    return;
+  }
+  // Intercept Ctrl+A / Cmd+A
+  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    e.preventDefault();
+    ws?.send(JSON.stringify({ type: 'key', key: 'Control+a' }));
+    return;
+  }
+  // Intercept Ctrl+C / Cmd+C (select text in remote browser — no-op for now)
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'x')) {
+    e.preventDefault();
+    return;
+  }
+  // Skip bare modifier keys
+  if (['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return;
+
   e.preventDefault();
   const key = e.key === ' ' ? 'Space' : e.key;
   ws?.send(JSON.stringify({ type: 'key', key }));
 });
 
+// ─── URL Bar ────────────────────────────────────────────────────────────
 function go() {
   let u = document.getElementById('urlIn').value.trim();
   if (!u) return;
@@ -180,7 +549,59 @@ function sendT() {
   inp.value = '';
 }
 
+// ─── Human-in-the-Loop (HITL) ──────────────────────────────────────────
+let hitlRequestId = null;
+const hitlModal = document.getElementById('hitlModal');
+const hitlPromptEl = document.getElementById('hitlPrompt');
+const hitlInput = document.getElementById('hitlInput');
+
+function showHitl(prompt, inputType, id) {
+  hitlRequestId = id;
+  hitlPromptEl.textContent = prompt || 'Input needed to continue.';
+  hitlInput.value = '';
+  hitlInput.type = inputType === 'password' ? 'password' : 'text';
+  hitlInput.placeholder = inputType === 'password' ? 'Enter password...' : 'Enter value...';
+  hitlModal.classList.add('show');
+  setTimeout(() => hitlInput.focus(), 100);
+  addLog({ action: 'hitl', detail: `Waiting: ${prompt}`, ts: new Date().toISOString() });
+}
+
+function hideHitl() {
+  hitlModal.classList.remove('show');
+  hitlRequestId = null;
+}
+
+async function submitHitl() {
+  const value = hitlInput.value;
+  if (!value) return;
+  try {
+    await fetch('/api/hitl/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: hitlRequestId, value }),
+    });
+  } catch (e) {
+    addLog({ action: 'error', detail: 'HITL submit failed: ' + e.message, ts: new Date().toISOString() });
+  }
+  hideHitl();
+}
+
+async function cancelHitl() {
+  try {
+    await fetch('/api/hitl/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch {}
+  hideHitl();
+}
+
+// Submit HITL on Enter key
+hitlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); submitHitl(); }
+  if (e.key === 'Escape') { e.preventDefault(); cancelHitl(); }
+});
+
+// ─── Init ───────────────────────────────────────────────────────────────
 connect();
+loadRecordings();
 </script>
 </body>
 </html>
