@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Shared browser control — human and AI copiloting a real Chromium browser at ~30fps.</strong><br />
+  <strong>Live browser streaming with a built-in vision agent — AI coding tools see and fix what you see at ~30fps.</strong><br />
   Part of the <a href="https://agenticwork.io">AgenticWork Platform</a>
 </p>
 
