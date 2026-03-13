@@ -1,8 +1,23 @@
-# GhostPilot
+<p align="center">
+  <img src="ghostpilot_logo.png" alt="GhostPilot" width="500" />
+</p>
 
-Shared browser control — human and AI copiloting a real browser together.
+<p align="center">
+  <strong>Shared browser control — human and AI copiloting a real Chromium browser at ~30fps.</strong><br />
+  Part of the <a href="https://agenticwork.io">AgenticWork Platform</a>
+</p>
 
-GhostPilot runs a headless Chromium instance and streams it to a web viewer in real time using CDP screencast (~30fps). The human sees and interacts with the browser directly. An AI agent (Claude, etc.) controls it through a REST API. Both operate on the same session simultaneously.
+<p align="center">
+  <a href="https://ghostpilot.agenticwork.io">Website</a> ·
+  <a href="https://docs.agenticwork.io/platform/ghostpilot">Docs</a> ·
+  <a href="https://agenticwork.io/blog/ghostpilot-shared-browser-ai">Blog Post</a>
+</p>
+
+---
+
+![GhostPilot — Peer with AI to develop UX faster](ghostpilot.png)
+
+GhostPilot runs a headless Chromium instance and streams it to a web viewer in real time using CDP screencast (~30fps). The human sees and interacts with the browser directly. An AI agent controls it through a REST API. Both operate on the same session simultaneously.
 
 ## Quick Start
 
