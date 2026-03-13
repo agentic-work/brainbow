@@ -8,14 +8,16 @@
 </p>
 
 <p align="center">
-  <a href="https://ghostpilot.agenticwork.io">Website</a> ·
+  <a href="https://agenticwork.io/ghostpilot">Website</a> ·
   <a href="https://docs.agenticwork.io/platform/ghostpilot">Docs</a> ·
   <a href="https://agenticwork.io/blog/ghostpilot-shared-browser-ai">Blog Post</a>
 </p>
 
 ---
 
-![GhostPilot — Peer with AI to develop UX faster](ghostpilot.png)
+[![GhostPilot — Peer with AI to develop UX faster](ghostpilot.png)](https://agenticwork.io/ghostpilot)
+
+> **See it in action:** Watch the [live demo video](https://agenticwork.io/ghostpilot) on our website.
 
 GhostPilot runs a headless Chromium instance and streams it to a web viewer in real time using CDP screencast (~30fps). The human sees and interacts with the browser directly. An AI agent controls it through a REST API. Both operate on the same session simultaneously.
 
