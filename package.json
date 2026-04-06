@@ -1,8 +1,16 @@
 {
-  "name": "ghostpilot",
+  "name": "@agentic-work/ghostpilot",
   "version": "2.0.0",
   "description": "Shared browser control + recording studio — human and AI copiloting a real browser",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentic-work/ghostpilot.git"
+  },
+  "homepage": "https://github.com/agentic-work/ghostpilot#readme",
+  "bugs": {
+    "url": "https://github.com/agentic-work/ghostpilot/issues"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
