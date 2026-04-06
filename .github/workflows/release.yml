@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build & Push to GAR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify tag matches package version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: tag $GITHUB_REF_NAME ($TAG_VERSION) does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "Version OK: $PKG_VERSION"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-east4-docker.pkg.dev --quiet
+
+      - name: Compute Docker tags
+        id: docker_tags
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          MAJOR="${VER%%.*}"
+          MINOR="${VER%.*}"
+          REPO="us-east4-docker.pkg.dev/agenticwork-dev/companions/ghostpilot"
+          {
+            echo "tag_v=$REPO:$GITHUB_REF_NAME"
+            echo "tag_full=$REPO:$VER"
+            echo "tag_minor=$REPO:$MINOR"
+            echo "tag_major=$REPO:$MAJOR"
+            echo "tag_latest=$REPO:latest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build & push Docker image (multi-arch)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.docker_tags.outputs.tag_v }}
+            ${{ steps.docker_tags.outputs.tag_full }}
+            ${{ steps.docker_tags.outputs.tag_minor }}
+            ${{ steps.docker_tags.outputs.tag_major }}
+            ${{ steps.docker_tags.outputs.tag_latest }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/agentic-work/ghostpilot
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --generate-notes \
+            --verify-tag
