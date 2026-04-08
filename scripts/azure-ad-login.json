@@ -1,0 +1,71 @@
+{
+  "name": "Azure AD Login",
+  "description": "Login to AgenticWork via Azure AD. Uses HITL to ask the user for email and password.",
+  "steps": [
+    {
+      "action": "goto",
+      "url": "https://chat-dev.agenticwork.io",
+      "waitUntil": "networkidle0"
+    },
+    {
+      "action": "wait",
+      "ms": 3000
+    },
+    {
+      "action": "click",
+      "text": "Continue with Microsoft",
+      "required": true
+    },
+    {
+      "action": "wait",
+      "ms": 5000
+    },
+    {
+      "action": "hitl",
+      "prompt": "Enter your Microsoft email address",
+      "type": "text"
+    },
+    {
+      "action": "fill_hitl",
+      "selector": "input[type='email'], input[name='loginfmt']",
+      "delay": 30
+    },
+    {
+      "action": "click",
+      "selector": "input[type='submit'], button[type='submit']",
+      "required": true
+    },
+    {
+      "action": "wait",
+      "ms": 4000
+    },
+    {
+      "action": "hitl",
+      "prompt": "Enter your Microsoft password",
+      "type": "password"
+    },
+    {
+      "action": "fill_hitl",
+      "selector": "input[type='password'], input[name='passwd']",
+      "delay": 30
+    },
+    {
+      "action": "click",
+      "selector": "input[type='submit'], button[type='submit']",
+      "required": true
+    },
+    {
+      "action": "wait",
+      "ms": 5000
+    },
+    {
+      "action": "click",
+      "selector": "input[type='submit'][value='No'], button:has-text('No')",
+      "required": false
+    },
+    {
+      "action": "wait",
+      "ms": 5000
+    }
+  ]
+}
