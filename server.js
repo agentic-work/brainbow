@@ -73,6 +73,18 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ type: 'text/*' }));
 
+// ─── Authentication Middleware ──────────────────────────────────────────────
+const GHOST_SECRET = process.env.GHOST_SECRET;
+if (GHOST_SECRET) {
+  app.use((req, res, next) => {
+    const auth = req.headers.authorization;
+    if (!auth || auth !== `Bearer ${GHOST_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+  });
+} // If GHOST_SECRET not set, all requests pass through (backward compat for local dev)
+
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -457,9 +469,65 @@ app.get('/api/screenshot', async (req, res) => {
   if (!requirePage(res)) return;
   try {
     const fullPage = req.query.full === 'true';
-    const buf = await page.screenshot({ type: 'png', fullPage });
-    res.set('Content-Type', 'image/png');
+    const format = req.query.format || 'jpeg'; // default to jpeg for smaller files
+    const quality = parseInt(req.query.quality || '70');
+    const maxWidth = parseInt(req.query.maxWidth || '0');
+
+    let buf;
+    if (format === 'png') {
+      buf = await page.screenshot({ type: 'png', fullPage });
+    } else {
+      buf = await page.screenshot({ type: 'jpeg', quality: Math.min(quality, 100), fullPage });
+    }
+
+    // Auto-shrink to stay under 300KB - fast JPEG re-shoot before expensive ffmpeg
+    const MAX_BYTES = parseInt(req.query.maxBytes || '300000');
+    if (buf.length > MAX_BYTES && format !== 'png') {
+      buf = await page.screenshot({ type: 'jpeg', quality: Math.max(25, quality - 30), fullPage });
+    }
+    if (buf.length > MAX_BYTES && format !== 'png') {
+      buf = await page.screenshot({ type: 'jpeg', quality: 15, fullPage });
+    }
+    // ffmpeg downscale as last resort
+    if ((buf.length > MAX_BYTES || maxWidth > 0) && hasFFmpeg) {
+      try {
+        const ts = Date.now();
+        const tmpIn = path.join(os.tmpdir(), `ghost_in_${ts}.jpg`);
+        const tmpOut = path.join(os.tmpdir(), `ghost_out_${ts}.jpg`);
+        fs.writeFileSync(tmpIn, buf);
+        const w = maxWidth > 0 ? maxWidth : 1024;
+        execSync(`ffmpeg -y -i ${tmpIn} -vf scale=${w}:-1 -q:v 6 ${tmpOut} 2>/dev/null`);
+        buf = fs.readFileSync(tmpOut);
+        fs.unlinkSync(tmpIn);
+        fs.unlinkSync(tmpOut);
+      } catch { /* fallback to original buf */ }
+    }
+
+    res.set('Content-Type', format === 'png' ? 'image/png' : 'image/jpeg');
     res.send(buf);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Returns the latest screencast frame as base64 JSON — no file I/O needed by the caller.
+// Use this from Claude instead of saving screenshots to disk and reading them as images.
+// Falls back to a fresh screenshot if no screencast frame is cached.
+app.get('/api/frame', async (req, res) => {
+  if (!requirePage(res)) return;
+  try {
+    let b64 = lastFrameB64;
+    if (!b64) {
+      // No screencast frame cached — take a fresh JPEG screenshot
+      const buf = await page.screenshot({ type: 'jpeg', quality: 60 });
+      b64 = buf.toString('base64');
+    }
+    res.json({
+      ok: true,
+      frame: b64,
+      width: viewportW,
+      height: viewportH,
+      timestamp: Date.now(),
+      source: lastFrameB64 ? 'screencast' : 'screenshot',
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
