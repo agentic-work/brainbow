@@ -1,7 +1,6 @@
 # SonarQube Code Analysis
 # Triggers: push to main, PRs to main, manual dispatch.
-# Auth: SONAR_TOKEN (project-scoped analysis token, repo secret)
-# Endpoint: SONAR_HOST_URL (repo variable)
+# Runs on self-hosted ARC runners (k8s-backed, scale-to-zero, no GH-hosted minutes used).
 name: SonarQube
 on:
   push:
@@ -15,7 +14,7 @@ permissions:
 jobs:
   sonarqube:
     name: SonarQube Scan
-    runs-on: ubuntu-latest
+    runs-on: arc-${{ github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
         with:
