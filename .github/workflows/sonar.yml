@@ -1,5 +1,5 @@
-# Sonarqube Cloud Code Analysis
-# Triggers on push to main and on pull requests targeting main.
+# SonarQube Code Analysis
+# Triggers: push to main, PRs to main, manual dispatch.
 # Auth: SONAR_TOKEN (project-scoped analysis token, repo secret)
 # Endpoint: SONAR_HOST_URL (repo variable)
 name: SonarQube
@@ -8,6 +8,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
   pull-requests: read
@@ -18,9 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history for blame / new-code detection
+          fetch-depth: 0
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
