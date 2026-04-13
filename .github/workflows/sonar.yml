@@ -1,0 +1,26 @@
+# Sonarqube Cloud Code Analysis
+# Triggers on push to main and on pull requests targeting main.
+# Auth: SONAR_TOKEN (project-scoped analysis token, repo secret)
+# Endpoint: SONAR_HOST_URL (repo variable)
+name: SonarQube
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  sonarqube:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for blame / new-code detection
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
