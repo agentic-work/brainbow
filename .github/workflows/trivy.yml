@@ -1,0 +1,28 @@
+# Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying prohibited.
+
+# Trivy — filesystem CVE scan. Fails the build if any Dockerfile/code
+# reference a library with a known CRITICAL or HIGH severity CVE.
+name: Trivy Scan
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  trivy:
+    name: Trivy FS Scan
+    runs-on: arc-${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table

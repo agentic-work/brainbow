@@ -1,0 +1,22 @@
+# Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying prohibited.
+
+# Dependency Review — flags PRs that introduce dependencies with
+# known high/critical vulnerabilities or disallowed licenses.
+name: Dependency Review
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  dep-review:
+    name: Dependency Review
+    runs-on: arc-${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
