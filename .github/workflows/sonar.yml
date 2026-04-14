@@ -2,18 +2,19 @@
 # Proprietary and confidential. Unauthorized copying prohibited.
 
 # SonarQube Code Analysis
-# Triggers: push to main, PRs to main, manual dispatch.
-# Runs on self-hosted ARC runners (k8s-backed, scale-to-zero, no GH-hosted minutes used).
+# Triggers: push to main/develop, PRs to main/develop, manual dispatch.
+# Runs on self-hosted ARC runners (k8s-backed, scale-to-zero).
+# Fails the build if SonarQube Quality Gate goes red.
 name: SonarQube
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write  # required for PR decoration
 jobs:
   sonarqube:
     name: SonarQube Scan
@@ -21,9 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # full history — SQ needs it for blame/new-code detection
+      - name: Set up Node.js
+        # Required because SonarQube's JS/TS analyzer shells out to `node -v`
+        # even for non-JS projects when scanning multi-lang repos.
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=600
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
