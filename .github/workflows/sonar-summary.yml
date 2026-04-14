@@ -1,0 +1,111 @@
+# Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying prohibited.
+
+# Sonar → GitHub Issues Summary
+# Maintains a single rolling GitHub issue (labeled "sonar-summary") per
+# repo, updated after each SonarQube scan and weekly. The issue body
+# contains current quality-gate state, key metrics, top open findings,
+# and a link to the full SQ dashboard.
+name: Sonar Summary Issue
+on:
+  workflow_run:
+    workflows: [SonarQube]
+    types: [completed]
+  schedule:
+    - cron: '0 13 * * 1'  # Mon 13:00 UTC (8am Central)
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  sync:
+    name: Sync findings to GitHub Issue
+    runs-on: arc-${{ github.event.repository.name }}
+    # Skip if triggered by a failed sonar run (no data to sync)
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Ensure sonar-summary label exists
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh label create sonar-summary --color 'FBCA04' --description 'SonarQube rolling summary' -R ${{ github.repository }} 2>/dev/null || true
+
+      - name: Build summary body
+        id: body
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          PROJECT: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          AUTH="-u ${SONAR_TOKEN}:"
+
+          # Project measures
+          MEASURES=$(curl -sk $AUTH \
+            "${SONAR_HOST_URL}/api/measures/component?component=${PROJECT}&metricKeys=alert_status,bugs,vulnerabilities,code_smells,security_hotspots,coverage,duplicated_lines_density,reliability_rating,security_rating,sqale_rating,ncloc")
+
+          get() { echo "$MEASURES" | jq -r --arg k "$1" '.component.measures[] | select(.metric==$k) | .value' ; }
+          rating() { case "$1" in 1.0) echo "A";; 2.0) echo "B";; 3.0) echo "C";; 4.0) echo "D";; 5.0) echo "E";; *) echo "-";; esac; }
+
+          QG=$(get alert_status)
+          BUGS=$(get bugs)
+          VULNS=$(get vulnerabilities)
+          SMELLS=$(get code_smells)
+          HOTSPOTS=$(get security_hotspots)
+          COVERAGE=$(get coverage)
+          DUP=$(get duplicated_lines_density)
+          REL=$(rating "$(get reliability_rating)")
+          SEC=$(rating "$(get security_rating)")
+          MAINT=$(rating "$(get sqale_rating)")
+          LOC=$(get ncloc)
+
+          # Top open CRITICAL+BLOCKER issues
+          TOP=$(curl -sk $AUTH \
+            "${SONAR_HOST_URL}/api/issues/search?componentKeys=${PROJECT}&severities=BLOCKER,CRITICAL&resolved=false&ps=15&s=SEVERITY&asc=false" \
+            | jq -r '.issues[] | "- **[\(.severity)]** `\(.rule)` — \(.component | split(":") | .[1] // .[0]):\(.line // 0) — \(.message)"')
+          [ -z "$TOP" ] && TOP="_No BLOCKER/CRITICAL open issues._"
+
+          {
+            echo "# SonarQube Summary — \`${PROJECT}\`"
+            echo
+            echo "_Auto-updated by [Sonar Summary Issue workflow](./actions/workflows/sonar-summary.yml) on each SQ scan completion and weekly._"
+            echo
+            echo "**Dashboard:** ${SONAR_HOST_URL}/dashboard?id=${PROJECT}"
+            echo
+            echo "## Quality Gate: **${QG:-UNKNOWN}**"
+            echo
+            echo "| Metric | Value |"
+            echo "|---|---:|"
+            echo "| Reliability rating | ${REL} |"
+            echo "| Security rating | ${SEC} |"
+            echo "| Maintainability rating | ${MAINT} |"
+            echo "| Bugs | ${BUGS:-0} |"
+            echo "| Vulnerabilities | ${VULNS:-0} |"
+            echo "| Security Hotspots | ${HOTSPOTS:-0} |"
+            echo "| Code Smells | ${SMELLS:-0} |"
+            echo "| Coverage | ${COVERAGE:-0}% |"
+            echo "| Duplication | ${DUP:-0}% |"
+            echo "| Lines of Code | ${LOC:-0} |"
+            echo
+            echo "## Top 15 BLOCKER / CRITICAL open issues"
+            echo
+            echo "$TOP"
+            echo
+            echo "---"
+            echo "_Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC_"
+          } > /tmp/body.md
+          echo "body_path=/tmp/body.md" >> $GITHUB_OUTPUT
+
+      - name: Upsert GitHub issue
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          REPO=${{ github.repository }}
+          existing=$(gh issue list -R "$REPO" -l sonar-summary -s open --json number --jq '.[0].number')
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue edit "$existing" -R "$REPO" --body-file /tmp/body.md
+            echo "Updated issue #$existing"
+          else
+            gh issue create -R "$REPO" \
+              --title "SonarQube Summary — ${{ github.event.repository.name }}" \
+              --body-file /tmp/body.md \
+              --label sonar-summary
+          fi
