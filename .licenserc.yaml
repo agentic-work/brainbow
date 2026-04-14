@@ -1,0 +1,49 @@
+# Apache skywalking-eyes / license-eye config.
+# Enforces AgenticWork LLC proprietary header on all source files.
+# Run locally: docker run --rm -v $PWD:/github/workspace apache/skywalking-eyes header check
+header:
+  license:
+    content: |
+      Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+      Proprietary and confidential. Unauthorized copying prohibited.
+    pattern: |
+      Copyright \(c\) \d{4}(-\d{4})? AgenticWork LLC\. All rights reserved\.
+      Proprietary and confidential\. Unauthorized copying prohibited\.
+  paths:
+    - '**'
+  paths-ignore:
+    - '**/node_modules/**'
+    - '**/.git/**'
+    - '**/dist/**'
+    - '**/build/**'
+    - '**/generated/**'
+    - '**/*.generated.*'
+    - '**/*.pb.*'
+    - '**/.venv/**'
+    - '**/__pycache__/**'
+    - '**/.next/**'
+    - '**/target/**'
+    - '**/vendor/**'
+    - '**/_vendor/**'
+    - '**/third_party/**'
+    - '**/external/**'
+    - '**/coverage/**'
+    - '**/.turbo/**'
+    - '**/*.min.js'
+    - '**/*.min.css'
+    - '**/*.md'
+    - '**/*.txt'
+    - '**/*.json'
+    - '**/*.toml'
+    - '**/*.lock'
+    - '**/LICENSE*'
+    - '**/NOTICE*'
+    - '**/*.ico'
+    - '**/*.png'
+    - '**/*.jpg'
+    - '**/*.svg'
+    - '.vscode/**'
+    - '.idea/**'
+    - '.github/ISSUE_TEMPLATE/**'
+    - '**/*.tsbuildinfo'
+  comment: on-failure
