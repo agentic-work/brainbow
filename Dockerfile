@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying prohibited.
+
 # =============================================================================
 # GhostPilot — shared browser control + recording studio
 # =============================================================================

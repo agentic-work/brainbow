@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying prohibited.
+
 # SonarQube Code Analysis
 # Triggers: push to main, PRs to main, manual dispatch.
 # Runs on self-hosted ARC runners (k8s-backed, scale-to-zero, no GH-hosted minutes used).

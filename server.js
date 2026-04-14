@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
+ * Proprietary and confidential. Unauthorized copying prohibited.
+ */
+
+/**
  * GhostPilot v2.0 — Shared Browser Control + Recording Studio
  *
  * Zero Playwright. Uses puppeteer-core + system Chromium via CDP.
