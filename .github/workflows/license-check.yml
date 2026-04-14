@@ -1,0 +1,17 @@
+name: License Header Check
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+jobs:
+  license-check:
+    name: Enforce AgenticWork LLC copyright header
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check license headers
+        uses: apache/skywalking-eyes/header@v0.6.0
+        with:
+          log: info
+          mode: check
