@@ -2,19 +2,22 @@
 # Proprietary and confidential. Unauthorized copying prohibited.
 
 # SonarQube Code Analysis
-# Triggers: push to main/develop, PRs to main/develop, manual dispatch.
+# Triggers: push to main, PRs to main, manual dispatch.
+# Community Edition does not support non-main branch analysis or PR
+# decoration. Develop-branch scanning + PR comments require Developer
+# Edition (paid license).
 # Runs on self-hosted ARC runners (k8s-backed, scale-to-zero).
 # Fails the build if SonarQube Quality Gate goes red.
 name: SonarQube
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
-  pull-requests: write  # required for PR decoration
+  pull-requests: read
 jobs:
   sonarqube:
     name: SonarQube Scan
@@ -24,8 +27,8 @@ jobs:
         with:
           fetch-depth: 0  # full history — SQ needs it for blame/new-code detection
       - name: Set up Node.js
-        # Required because SonarQube's JS/TS analyzer shells out to `node -v`
-        # even for non-JS projects when scanning multi-lang repos.
+        # SonarQube's JS/TS analyzer shells out to `node -v` at scan start.
+        # Without it, JS/TS scans crash before uploading any report.
         uses: actions/setup-node@v4
         with:
           node-version: '20'
