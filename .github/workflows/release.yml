@@ -19,7 +19,7 @@ concurrency:
 jobs:
   publish:
     name: Build & Push to GAR
-    runs-on: ubuntu-latest
+    runs-on: arc-${{ github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
 
