@@ -16,7 +16,7 @@ concurrency:
 jobs:
   syntax:
     name: Syntax & Install
-    runs-on: ubuntu-latest
+    runs-on: arc-${{ github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +32,7 @@ jobs:
 
   docker-build:
     name: Docker build (no push)
-    runs-on: ubuntu-latest
+    runs-on: arc-${{ github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
 
