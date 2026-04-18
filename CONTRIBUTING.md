@@ -45,5 +45,4 @@ Types: `feat`, `fix`, `docs`, `test`, `ci`, `refactor`, `chore`. We commit to
 
 ## Filing bugs
 
-GitHub Issues. Include the `brainbow --version` output, your OS + Node
-version, and the smallest reproducer that triggers the bug.
+GitHub Issues. Include `node -p "require('./package.json').version"`, your OS + Node version, and the smallest reproducer that triggers the bug.
