@@ -50,7 +50,7 @@ if (GHOST_SECRET) {
 } // If GHOST_SECRET not set, all requests pass through (backward compat for local dev)
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ noServer: true });
 
 // ─── SessionManager ─────────────────────────────────────────────────────────
 const MODE = process.env.BRAINBOW_MODE || 'local';
@@ -1037,40 +1037,44 @@ app.get('/', (req, res) => {
 });
 
 // ─── WebSocket Handling ──────────────────────────────────────────────────────
-wss.on('connection', (ws) => {
-  console.log('[Brainbow] Viewer connected');
-  // Use default session for legacy single-session WebSocket UX.
-  // Task 14 (Phase 6) will add per-session WebSocket routing.
-  sessionManager.get('default').then(session => {
-    if (session.lastFrameB64) ws.send(JSON.stringify({ type: 'frame', data: session.lastFrameB64 }));
-    ws.send(JSON.stringify({ type: 'log', entries: session.actionLog.slice(-20) }));
-    ws.send(JSON.stringify({ type: 'recording', state: session.recording ? 'started' : 'stopped' }));
-  }).catch(() => {});
-
-  ws.on('message', async (raw) => {
+// Manual upgrade handler so we can parse sessionId from /ws/:sessionId.
+// noServer: true means the ws library does NOT auto-attach, so this is the
+// only upgrade handler — no race condition.
+server.on('upgrade', (request, socket, head) => {
+  const match = request.url && request.url.match(/^\/ws(?:\/([^/?#]+))?/);
+  if (!match) {
+    socket.destroy();
+    return;
+  }
+  const sessionId = decodeURIComponent(match[1] || 'default');
+  wss.handleUpgrade(request, socket, head, async (ws) => {
+    let session;
     try {
-      const msg = JSON.parse(raw);
-      const session = await sessionManager.get('default');
-      if (!session.page) return;
-      if (msg.type === 'click') {
-        await session.page.mouse.click(msg.x, msg.y);
-        session.log('human-click', `(${msg.x}, ${msg.y})`);
-      } else if (msg.type === 'mousemove') {
-        await session.page.mouse.move(msg.x, msg.y);
-      } else if (msg.type === 'type') {
-        await session.page.keyboard.type(msg.text);
-        session.log('human-type', msg.text?.substring(0, 50));
-      } else if (msg.type === 'key') {
-        await session.page.keyboard.press(msg.key);
-        session.log('human-key', msg.key);
-      } else if (msg.type === 'scroll') {
-        await session.page.mouse.wheel({ deltaX: 0, deltaY: msg.dy || 300 });
-      } else if (msg.type === 'mousedown') {
-        await session.page.mouse.down();
-      } else if (msg.type === 'mouseup') {
-        await session.page.mouse.up();
-      }
-    } catch {}
+      session = await sessionManager.get(sessionId);
+    } catch (e) {
+      ws.close(1008, JSON.stringify({ error: e.message, code: e.code }));
+      return;
+    }
+    session.subscribe(ws);
+    if (session.lastFrameB64) ws.send(JSON.stringify({ type: 'frame', data: session.lastFrameB64 }));
+    ws.send(JSON.stringify({ type: 'log', entries: session.actionLog.slice(-20), sessionId }));
+    ws.send(JSON.stringify({ type: 'recording', state: session.recording ? 'started' : 'stopped' }));
+
+    ws.on('close', () => session.unsubscribe(ws));
+
+    ws.on('message', async (raw) => {
+      try {
+        const msg = JSON.parse(raw);
+        if (!session.page) return;
+        if (msg.type === 'click') { await session.page.mouse.click(msg.x, msg.y); session.log('human-click', `(${msg.x}, ${msg.y})`); }
+        else if (msg.type === 'mousemove') { await session.page.mouse.move(msg.x, msg.y); }
+        else if (msg.type === 'type') { await session.page.keyboard.type(msg.text); session.log('human-type', msg.text?.substring(0, 50)); }
+        else if (msg.type === 'key') { await session.page.keyboard.press(msg.key); session.log('human-key', msg.key); }
+        else if (msg.type === 'scroll') { await session.page.mouse.wheel({ deltaX: 0, deltaY: msg.dy || 300 }); }
+        else if (msg.type === 'mousedown') { await session.page.mouse.down(); }
+        else if (msg.type === 'mouseup') { await session.page.mouse.up(); }
+      } catch {}
+    });
   });
 });
 
