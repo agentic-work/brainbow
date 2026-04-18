@@ -9,6 +9,7 @@ export default defineConfig({
     include: ['tests/**/*.test.js'],
     testTimeout: 30000,           // trip-wires launch real Chromium
     hookTimeout: 30000,
+    passWithNoTests: true,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
