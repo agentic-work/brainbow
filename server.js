@@ -25,7 +25,12 @@ import { SessionManager } from './src/session-manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.BRAINBOW_PORT || process.env.GHOST_PORT || '4444');
-const RECORDINGS_DIR = process.env.GHOST_RECORDINGS || path.join(os.tmpdir(), 'ghostpilot-recordings');
+const RECORDINGS_DIR = process.env.BRAINBOW_RECORDINGS
+  || process.env.GHOST_RECORDINGS
+  || path.join(os.tmpdir(), 'brainbow-recordings');
+if (process.env.GHOST_RECORDINGS && !process.env.BRAINBOW_RECORDINGS) {
+  console.warn('[Brainbow] GHOST_RECORDINGS is deprecated — use BRAINBOW_RECORDINGS.');
+}
 
 fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 
@@ -38,16 +43,19 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ type: 'text/*' }));
 
 // ─── Authentication Middleware ──────────────────────────────────────────────
-const GHOST_SECRET = process.env.GHOST_SECRET;
-if (GHOST_SECRET) {
+const BRAINBOW_TOKEN = process.env.BRAINBOW_TOKEN || process.env.GHOST_SECRET;
+if (process.env.GHOST_SECRET && !process.env.BRAINBOW_TOKEN) {
+  console.warn('[Brainbow] GHOST_SECRET is deprecated — use BRAINBOW_TOKEN.');
+}
+if (BRAINBOW_TOKEN) {
   app.use((req, res, next) => {
     const auth = req.headers.authorization;
-    if (!auth || auth !== `Bearer ${GHOST_SECRET}`) {
+    if (!auth || auth !== `Bearer ${BRAINBOW_TOKEN}`) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     next();
   });
-} // If GHOST_SECRET not set, all requests pass through (backward compat for local dev)
+} // If BRAINBOW_TOKEN not set, all requests pass through (backward compat for local dev)
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -749,7 +757,12 @@ app.get('/api/recordings/:name', (req, res) => {
 });
 
 // ─── Scripts Engine (repeatable macros) ─────────────────────────────────────
-const SCRIPTS_DIR = process.env.GHOST_SCRIPTS || path.join(__dirname, 'scripts');
+const SCRIPTS_DIR = process.env.BRAINBOW_SCRIPTS
+  || process.env.GHOST_SCRIPTS
+  || path.join(__dirname, 'scripts');
+if (process.env.GHOST_SCRIPTS && !process.env.BRAINBOW_SCRIPTS) {
+  console.warn('[Brainbow] GHOST_SCRIPTS is deprecated — use BRAINBOW_SCRIPTS.');
+}
 try { fs.mkdirSync(SCRIPTS_DIR, { recursive: true }); } catch {}
 
 app.get('/api/scripts', (req, res) => {
