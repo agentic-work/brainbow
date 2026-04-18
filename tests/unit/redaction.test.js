@@ -13,7 +13,9 @@ describe('redactSecrets', () => {
 
   it('redacts JWTs', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.' + 'a'.repeat(40) + '.' + 'b'.repeat(40);
-    expect(redactSecrets(jwt)).not.toContain(jwt);
+    const result = redactSecrets(jwt);
+    expect(result).not.toContain(jwt);
+    expect(result).toMatch(/^eyJh\*+/);  // prefix-preserving replacement
   });
 
   it('redacts email addresses', () => {
@@ -40,6 +42,30 @@ describe('redactSecrets', () => {
   it('returns null/undefined unchanged', () => {
     expect(redactSecrets(null)).toBe(null);
     expect(redactSecrets(undefined)).toBe(undefined);
+  });
+
+  it('redacts ghp_ GitHub personal access tokens', () => {
+    expect(redactSecrets('ghp_abc1234567890xyzABCDEF')).not.toContain('ghp_abc1234567890xyzABCDEF');
+  });
+
+  it('redacts sk- API keys', () => {
+    expect(redactSecrets('sk-proj-abc1234567890')).not.toContain('sk-proj-abc1234567890');
+  });
+
+  it('redacts xoxb- Slack bot tokens', () => {
+    expect(redactSecrets('xoxb-1234567890-abcdefgh')).not.toContain('xoxb-1234567890-abcdefgh');
+  });
+
+  it('does NOT redact bare state= in log messages', () => {
+    expect(redactSecrets('connection state=active')).toBe('connection state=active');
+  });
+
+  it('does NOT redact bare code= in log messages', () => {
+    expect(redactSecrets('process exited with code=1')).toBe('process exited with code=1');
+  });
+
+  it('redacts state= when in URL query string context', () => {
+    expect(redactSecrets('/callback?state=abc123def456')).toMatch(/state=\*+/);
   });
 
   it('exposes SECRET_PATTERNS as an array of RegExp', () => {

@@ -5,6 +5,15 @@
 // with asterisks. Used by every log line and broadcast frame so secrets
 // never leave the process — see Invariant I5 in the foundation spec.
 
+/**
+ * Array of redaction regexes. Shared by `redactSecrets()`.
+ *
+ * NOTE: These RegExp instances have `/g` flag, which means their
+ * `lastIndex` is mutated across calls. Do NOT call `.test()` or
+ * `.exec()` on these patterns directly — use `redactSecrets()` which
+ * resets `lastIndex` internally. Read-only inspection (array length,
+ * instanceof checks) is safe.
+ */
 export const SECRET_PATTERNS = [
   /(?:password|passwd|pwd|pass|secret|token|api[_-]?key|auth|bearer|credential)[\s]*[=:]["']?\s*\S+/gi,
   /Bearer\s+[A-Za-z0-9._-]+/gi,
@@ -13,7 +22,7 @@ export const SECRET_PATTERNS = [
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
   /(?:client[_-]?secret|access[_-]?key|secret[_-]?key)[\s]*[=:]["']?\s*\S+/gi,
   /(?:password|pwd)=[^&;\s"']+/gi,
-  /(?:client_id|tenant|state|code|nonce|id_token|access_token|refresh_token|assertion)=[^&\s"']+/gi,
+  /[?&](?:client_id|tenant|state|code|nonce|id_token|access_token|refresh_token|assertion)=[^&\s"']+/gi,
   /login\.microsoftonline\.com\/[0-9a-f-]{36}/gi,
   /(?:oauth2|authorize|token|callback)[^"'\s]*[0-9a-f-]{36}/gi,
 ];
@@ -34,3 +43,5 @@ export function redactSecrets(text) {
   }
   return result;
 }
+
+Object.freeze(SECRET_PATTERNS);
