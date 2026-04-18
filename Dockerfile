@@ -1,5 +1,4 @@
-# Copyright (c) 2024-2026 AgenticWork LLC. All rights reserved.
-# Proprietary and confidential. Unauthorized copying prohibited.
+# SPDX-License-Identifier: MIT
 
 # =============================================================================
 # GhostPilot — shared browser control + recording studio
