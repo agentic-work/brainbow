@@ -442,12 +442,13 @@ app.post('/api/eval', async (req, res) => {
     const result = await session.page.evaluate(wrappedCode);
     res.json({ ok: true, result, sessionId: session.sessionId });
   } catch (e) {
+    if (res.headersSent) return;
     try {
       const raw = req.body.script || req.body.expression;
-      const result = await (await getSession(req, res))?.page?.evaluate(raw);
-      res.json({ ok: true, result, sessionId: sessionIdOf(req) });
+      const result = await session.page.evaluate(raw);
+      res.json({ ok: true, result, sessionId: session.sessionId });
     } catch (e2) {
-      res.status(500).json({ ok: false, error: e.message });
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
     }
   }
 });
@@ -782,6 +783,18 @@ app.post('/api/scripts/:name/run', async (req, res) => {
 
   const script = JSON.parse(fs.readFileSync(filepath, 'utf8'));
   session.log('script-run', `${script.name} (${script.steps.length} steps)`);
+
+  // If the first step isn't 'goto' and no browser is open yet, bail early
+  // with a clear message — otherwise each browser-touching step fails with
+  // a null-dereference that gets returned as an opaque per-step error.
+  const firstStep = script.steps[0];
+  const scriptNeedsExistingBrowser = !firstStep || firstStep.action !== 'goto';
+  if (scriptNeedsExistingBrowser && !session.page) {
+    return res.status(400).json({
+      error: 'No browser open. POST /api/launch first, or start the script with a goto step.',
+      sessionId: session.sessionId,
+    });
+  }
 
   const results = [];
   for (const step of script.steps) {
