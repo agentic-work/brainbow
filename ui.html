@@ -238,11 +238,13 @@ function redact(text) {
 }
 
 // ─── WebSocket ──────────────────────────────────────────────────────────
-function connect() {
-  const p = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${p}://${location.host}/ws`);
+async function connectViewer() {
+  const whoamiResp = await fetch('/api/whoami');
+  const { sessionId } = await whoamiResp.json();
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(sessionId)}`);
   ws.onopen = () => { document.getElementById('dot').classList.add('on'); document.getElementById('stat').textContent = 'live'; };
-  ws.onclose = () => { document.getElementById('dot').classList.remove('on'); document.getElementById('stat').textContent = 'offline'; setTimeout(connect, 1500); };
+  ws.onclose = () => { document.getElementById('dot').classList.remove('on'); document.getElementById('stat').textContent = 'offline'; setTimeout(connectViewer, 1500); };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.type === 'frame') {
@@ -602,7 +604,7 @@ hitlInput.addEventListener('keydown', (e) => {
 });
 
 // ─── Init ───────────────────────────────────────────────────────────────
-connect();
+connectViewer();
 loadRecordings();
 </script>
 </body>
