@@ -91,7 +91,7 @@ These are non-negotiable. Every change must preserve all of them.
 
 - **Local dev (default):** one `node server.js` process, one default session, REST + MCP-stdio + WebSocket all running. Same UX as today.
 - **CI / scripted:** `brainbow run <tape>` — no Express, no WebSocket, no UI. Just parse → execute → render → exit.
-- **Cloud (k8s):** N pods behind ingress. Each pod hosts M sessions (configurable, default 4). Ingress routes `/s/:sessionId/*` and `/ws/:sessionId` to the pod owning that session. Session-to-pod stickiness via a small router service or via consistent hashing. (Detailed cloud topology out of scope for v1 — v1 ships local + CI; cloud is v2 once the local story is rock-solid.)
+- **Cloud (k8s, in v1):** see §7.1 below for the full topology. TL;DR: a Helm chart deploys a `Deployment` of N Brainbow replicas in namespace `brainbow`; sessionIds encode the owning pod (`{podOrdinal}-{uuid}`) so routing is stateless; ingress at `brainbow.agenticwork.io` does path-based routing on `/s/{sessionId}/*` and `/ws/{sessionId}`; auth via `BRAINBOW_TOKEN` per request; the agentic platform's `awp-brainbow-mcp` service translates AgenticWork API keys → tokens and picks which pod to start a session on.
 
 ---
 
@@ -249,7 +249,59 @@ Implementation details:
 - **WebSocket path becomes `/ws/:sessionId`.** The viewer HTML asks the server for its sessionId at boot (via `/api/whoami`) and connects to the right path.
 - **Recording state, HITL queue, vision cache, frame buffer** all move from module globals into the Session object.
 
-In local mode, none of this is visible to the user — `default` is implicit. The cost is plumbing through one parameter; the benefit is no rewrite when cloud arrives.
+In local mode, none of this is visible to the user — `default` is implicit.
+
+### 7.1 Cloud topology (v1)
+
+Goal: a user opens `brainbow.agenticwork.io/s/{sessionId}` in a browser and sees the live Chromium that an agent (running anywhere) is driving — same shared-browser UX as local. The shipping unit is a Helm chart in `agentic/helm/brainbow/`.
+
+**Shape:**
+
+```
+                    ┌────────────────────────────────────┐
+                    │  agenticwork-api (existing)        │
+                    │  user submits AgenticWork API key  │
+                    └────────────────┬───────────────────┘
+                                     │
+                                     ▼
+                    ┌────────────────────────────────────┐
+                    │  awp-brainbow-mcp                   │
+                    │  - validates API key               │
+                    │  - mints BRAINBOW_TOKEN per session │
+                    │  - picks pod ordinal for new sess  │
+                    │  - returns sessionId = "{ord}-{uuid}"│
+                    └────────────────┬───────────────────┘
+                                     │
+                                     ▼
+              ingress-nginx: brainbow.agenticwork.io
+              path-based, parses {ord} from sessionId
+                                     │
+            ┌────────────────────────┼────────────────────────┐
+            ▼                        ▼                        ▼
+       ┌─────────┐              ┌─────────┐              ┌─────────┐
+       │ pod-0   │              │ pod-1   │              │ pod-N   │
+       │ Brainbow│              │ Brainbow│              │ Brainbow│
+       │ M sess. │              │ M sess. │              │ M sess. │
+       └─────────┘              └─────────┘              └─────────┘
+```
+
+**Key design choices:**
+
+- **Stateless routing via session-id encoding.** `sessionId = "{podOrdinal}-{uuid}"`. Ingress parses the ordinal prefix and routes to `brainbow-{ord}.brainbow-headless`. No router service, no shared state, no cookie affinity.
+- **StatefulSet, not Deployment.** Stable pod ordinals (`brainbow-0`, `brainbow-1`, …) are required for the routing scheme above. Headless service backs the StatefulSet.
+- **Per-pod session cap (M, default 4).** When all pods are full, `awp-brainbow-mcp` returns 503 with `Retry-After`. Autoscaling is a v2 concern; v1 ships fixed replicas.
+- **Auth.** `BRAINBOW_TOKEN` is a per-session bearer token minted by `awp-brainbow-mcp` and required on every REST/MCP/WebSocket call to that session. Tokens are short-lived (default 4h, sliding renewal on activity) and scoped to a single sessionId.
+- **Per-user isolation.** Each session = one Chromium browser process inside the pod. Browsers don't share state across sessions (separate user-data-dirs). Crashes are session-local.
+- **Resource limits per pod.** `1 CPU / 2Gi memory` request, `2 CPU / 4Gi limit`. `--no-sandbox --disable-dev-shm-usage` Chrome flags (already in code) keep memory predictable. M=4 sessions × ~400MB Chromium each fits.
+- **Persistence.** Recordings written to a per-pod `emptyDir` (ephemeral). On `tape_render` completion, the file is uploaded to object storage (GCS bucket `brainbow-recordings`, signed URL returned to caller). Tapes themselves are also stored — they're the source of truth.
+- **Observability.** Standard cluster patterns: stdout logs → Loki, `/metrics` → Prometheus (sessions active, frames/sec, ffmpeg jobs queued, browser crashes), span context propagated from `awp-brainbow-mcp` calls.
+
+**What's deferred to v2:**
+
+- Autoscaling (HPA on session count or browser memory).
+- Cross-pod session migration (if a pod dies mid-session, the user reconnects to a new session — no migration of in-flight browser state).
+- Multi-region.
+- Object-storage backends other than GCS.
 
 ---
 
@@ -365,17 +417,19 @@ The repo currently has 0% coverage (per the CLAUDE.md runbook, this drags the So
 
 ## 12. Migration from GhostPilot
 
-1. Repo done: `agentic-work/brainbow` (private) created, history preserved.
+1. Repo done: `agentic-work/brainbow` (private; flips to public once OSS-ready) created, history preserved.
 2. Old `agentic-work/ghostpilot` repo: archived with a README redirect ("This project moved to brainbow").
 3. Code rename (in this repo):
-   - `package.json`: name `@gnomus/brainbow` (or `@agentic-work/brainbow`), description, repo, homepage updated.
+   - `package.json`: name unset for now (npm publish deferred — see §13); description / repo / homepage updated to brainbow.
+   - License: stays MIT (was already MIT in package.json + README). Drop the proprietary `.licenserc.yaml` + `license-check.yml` workflow + per-file `Proprietary and confidential` headers. Add `LICENSE` (MIT) at repo root and a single `SPDX-License-Identifier: MIT` comment per source file (lightweight, no skywalking-eyes enforcement).
    - Env vars: `GHOST_*` → `BRAINBOW_*`. Old names honored with a deprecation warning for one minor release.
    - Default port stays 4444.
    - Console banner, README, server.js comments updated.
 4. agenticode rename: `GhostPilotTool` → `BrainbowTool` with one-release alias.
 5. Skill files written: `integrations/{openclaw,claude-code}/brainbow/SKILL.md`.
 6. agentic service: `services/mcps/awp-brainbow-mcp/` scaffolded.
-7. CI: ARC runner set renamed `arc-ghostpilot` → `arc-brainbow` (per runbook helm command). SonarQube project key updated. Secrets `SONAR_TOKEN`, `BRAINBOW_TOKEN` set on the new repo.
+7. agentic Helm chart: `agentic/helm/brainbow/` added (StatefulSet, headless service, ingress, BRAINBOW_TOKEN secret, resource limits per §7.1).
+8. CI: ARC runner set renamed `arc-ghostpilot` → `arc-brainbow` (per runbook helm command). SonarQube project key updated to `brainbow`. Secrets `SONAR_TOKEN`, `SONAR_HOST_URL` set on the new repo.
 
 ---
 
@@ -383,7 +437,8 @@ The repo currently has 0% coverage (per the CLAUDE.md runbook, this drags the So
 
 - Retro FX (`ScanLines`, `VHS`, `Grain`, `Vignette`) — v2.
 - Audio overlay on recordings — v2.
-- Cloud k8s deployment topology (router service, session stickiness, autoscaling) — v2. v1 ships the **interfaces** that make v2 possible without a rewrite.
+- **npm package publish** — name + scope undecided, no point publishing before v1 stabilizes. CLI ships via `npx github:agentic-work/brainbow` or local `npm link` for dogfooding.
+- Cloud autoscaling, multi-region, cross-pod session migration — v2. v1 cloud ships fixed replicas + per-pod session cap (see §7.1).
 - Replacing the legacy `scripts/*.json` macros — they keep working as a lower-level concept; tapes are the new public surface.
 - Mobile device emulation (Playwright's 143-device set) — v2.
 
@@ -415,11 +470,13 @@ A v1 release is ready when **all** of these pass:
 8. OpenClaw skill installs and triggers (`openclaw skills list` shows brainbow).
 9. Claude Code skill installs and `/brainbow` appears in the slash-command menu.
 10. agenticode `BrainbowTool` (and `GhostPilotTool` alias) both resolve to the same code path.
+11. **Cloud:** Helm chart deploys cleanly to a fresh namespace; a user can hit `brainbow.agenticwork.io/s/{sessionId}` and see a live browser driven by an MCP client running on a different machine; killing one pod takes down only the sessions on that pod, others are unaffected.
+12. **OSS readiness:** `LICENSE` (MIT) at root, no `Proprietary and confidential` headers remain in source, `README` reflects the OSS posture, `CONTRIBUTING.md` exists.
 
 ---
 
-## 16. Open questions for user review
+## 16. Resolved decisions log
 
-- **Org choice:** publish npm package as `@gnomus/brainbow` or `@agentic-work/brainbow`? Default assumption: `@agentic-work/brainbow` to match existing repo namespace, can switch later.
-- **License header replacement:** the CI changes in the working tree remove `.licenserc.yaml` and the license-check workflow. Confirm we're dropping that proprietary-headers convention — assumed yes since it's already in `git status`.
-- **Cloud deployment depth:** v1 ships local + CI only; cloud topology is v2. Is that the right cut, or do you want at least a "single-pod, single-tenant cloud" path in v1?
+- **npm publish:** deferred — see §13. No package scope chosen yet.
+- **License:** Brainbow goes OSS under MIT. Proprietary `.licenserc.yaml` + `license-check.yml` workflow + per-file `Proprietary and confidential` headers are removed. `LICENSE` at root + lightweight `SPDX-License-Identifier: MIT` per source file replace the skywalking-eyes enforcement.
+- **Cloud in v1:** yes — ships in v1 per §7.1. Autoscaling, session migration, multi-region defer to v2.
