@@ -1,6 +1,6 @@
-# GhostPilot — Agent Runbook
+# Brainbow — Agent Runbook
 
-GhostPilot is a Node.js app that streams a headless Chromium instance to a web viewer at ~30fps while an AI agent controls it via REST. Same as the other `agentic-work` repos, CI runs on the k3s-hosted ARC runner `arc-ghostpilot`, SonarQube is served at `https://sonarqube-dev.agenticwork.io`, and the OpenClaw skill (if any) lives under `integrations/openclaw/`.
+Brainbow is a Node.js app that streams a headless Chromium instance to a web viewer at ~30fps while an AI agent controls it via REST. Same as the other `agentic-work` repos, CI runs on the k3s-hosted ARC runner `arc-brainbow`, SonarQube is served at `https://sonarqube-dev.agenticwork.io`, and the OpenClaw skill (if any) lives under `integrations/openclaw/`.
 
 The sections below are a **runbook** extracted from the synth repo's end-to-end stabilization work. If CI is queueing, Sonar is showing 0% coverage, or the OpenClaw skill isn't triggering — match the symptom and apply the fix.
 
@@ -16,7 +16,7 @@ The sections below are a **runbook** extracted from the synth repo's end-to-end 
 
 ```bash
 # Raise maxRunners without nuking other values:
-helm upgrade arc-ghostpilot \
+helm upgrade arc-brainbow \
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
   --version 0.14.0 -n arc-runners \
   --reuse-values \
@@ -78,13 +78,13 @@ Exclude from *both* — `sonar.exclusions` removes them from the scan entirely; 
 1. Generate a **Global Analysis Token** in SonarQube UI: User avatar → My Account → Security → Generate Tokens (name: `<repo>-ci`, type: **Global Analysis**).
 2. Store the value:
    ```bash
-   gh secret set SONAR_TOKEN -R agentic-work/ghostpilot -b "sqa_..."
+   gh secret set SONAR_TOKEN -R agentic-work/brainbow -b "sqa_..."
    ```
 3. Set the host URL (runners hit it from inside the cluster, no public ingress needed):
    ```bash
    gh variable set SONAR_HOST_URL \
      --body "http://sonarqube-sonarqube.sonarqube.svc:9000" \
-     -R agentic-work/ghostpilot
+     -R agentic-work/brainbow
    ```
 
 For the whole org in one shot (needs `admin:org` token scope):
@@ -120,7 +120,7 @@ Query the list:
 
 ```bash
 curl -s -u "$SONAR_TOKEN:" \
-  "$SONAR_HOST_URL/api/issues/search?componentKeys=ghostpilot&types=BUG&ps=20" \
+  "$SONAR_HOST_URL/api/issues/search?componentKeys=brainbow&types=BUG&ps=20" \
   | python3 -m json.tool
 ```
 
@@ -135,7 +135,7 @@ All three are MAJOR → push Reliability to C. Fix all of them, push, and the ne
 
 ```bash
 curl -s -u "$SONAR_TOKEN:" \
-  "$SONAR_HOST_URL/api/qualitygates/project_status?projectKey=ghostpilot" \
+  "$SONAR_HOST_URL/api/qualitygates/project_status?projectKey=brainbow" \
   | python3 -m json.tool
 ```
 
