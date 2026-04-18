@@ -1,14 +1,14 @@
 {
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Shared browser control + cinematic recording studio — agent and human copilot a real Chromium together. Built for local dev, packaged as MCP / OpenClaw skill / Claude Code skill / native agenticode tool.",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agentic-work/ghostpilot.git"
+    "url": "git+https://github.com/agentic-work/brainbow.git"
   },
-  "homepage": "https://github.com/agentic-work/ghostpilot#readme",
+  "homepage": "https://github.com/agentic-work/brainbow#readme",
   "bugs": {
-    "url": "https://github.com/agentic-work/ghostpilot/issues"
+    "url": "https://github.com/agentic-work/brainbow/issues"
   },
   "scripts": {
     "start": "node server.js",
