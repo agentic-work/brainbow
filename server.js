@@ -26,6 +26,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { redactSecrets } from './src/redaction.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.GHOST_PORT || '4444');
@@ -88,42 +89,6 @@ if (GHOST_SECRET) {
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
-
-// ─── Secret Redaction ────────────────────────────────────────────────────
-const SECRET_PATTERNS = [
-  /(?:password|passwd|pwd|pass|secret|token|api[_-]?key|auth|bearer|credential)[\s]*[=:]["']?\s*\S+/gi,
-  /Bearer\s+[A-Za-z0-9._\-]+/gi,
-  /(?:awc_|sk-|pk-|ghp_|gho_|github_pat_|xox[bpars]-)[A-Za-z0-9_\-]{10,}/g,
-  /eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}/g,
-  /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g,
-  /(?:client[_-]?secret|access[_-]?key|secret[_-]?key)[\s]*[=:]["']?\s*\S+/gi,
-  /(?:password|pwd)=[^&;\s"']+/gi,
-  // OAuth/SSO URL parameters — redact tenant IDs, client IDs, tokens, state, codes
-  /(?:client_id|tenant|state|code|nonce|id_token|access_token|refresh_token|assertion)=[^&\s"']+/gi,
-  // Azure AD / Microsoft login URLs — redact tenant GUID from path
-  /login\.microsoftonline\.com\/[0-9a-f-]{36}/gi,
-  // Any GUID that looks like a tenant/client ID in an OAuth context
-  /(?:oauth2|authorize|token|callback)[^"'\s]*[0-9a-f-]{36}/gi,
-];
-
-function redactSecrets(text) {
-  if (!text) return text;
-  let result = text;
-  for (const p of SECRET_PATTERNS) {
-    // Reset lastIndex for global regexes to avoid stale state
-    p.lastIndex = 0;
-    result = result.replace(p, (match) => {
-      // For OAuth URL params, redact just the value
-      const eqIdx = match.search(/[=:]\s*/);
-      if (eqIdx > 0) return match.substring(0, eqIdx + 1) + '******';
-      // For login URLs with tenant, replace the tenant GUID
-      if (/login\.microsoftonline/i.test(match)) return 'login.microsoftonline.com/******';
-      if (match.length > 8) return match.substring(0, 4) + '******';
-      return '******';
-    });
-  }
-  return result;
-}
 
 // ─── State ──────────────────────────────────────────────────────────────
 let browser = null;
