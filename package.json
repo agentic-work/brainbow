@@ -1,7 +1,6 @@
 {
-  "name": "@agentic-work/ghostpilot",
   "version": "0.6.2",
-  "description": "Shared browser control + recording studio — human and AI copiloting a real browser",
+  "description": "Shared browser control + cinematic recording studio — agent and human copilot a real Chromium together. Built for local dev, packaged as MCP / OpenClaw skill / Claude Code skill / native agenticode tool.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -13,11 +12,19 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "express": "^4.21.0",
     "puppeteer-core": "^24.0.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "supertest": "^6.3.4"
   }
 }
