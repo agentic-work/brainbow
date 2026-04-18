@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
-// Per-test setup: allocate a unique port per test file to avoid collisions
-// when multiple suites spin up Express in parallel.
+//
+// Global test setup. Tests that spin up Express should use an
+// OS-assigned port to avoid collisions across parallel vitest workers:
+//
+//   const server = app.listen(0);
+//   const { port } = server.address();
+//
+// …never `server.listen(14444)` or any other hardcoded number. Vitest
+// runs test files in worker threads by default (vitest 1.x), and
+// hardcoded ports race across workers.
 import { afterEach } from 'vitest';
-
-let nextPort = 14444;
-export function nextTestPort() {
-  return nextPort++;
-}
 
 afterEach(async () => {
   // Give Chromium a beat to fully release ports between tests.
