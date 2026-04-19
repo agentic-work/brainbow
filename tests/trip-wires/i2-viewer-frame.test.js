@@ -4,10 +4,16 @@ import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { findChrome } from '../../src/session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 15002;
 const FIXTURE = 'file://' + path.join(__dirname, '..', 'fixtures', 'hello.html');
+
+// Trip-wire needs a real Chromium — skip in environments without one
+// (ARC runner pods don't have Chromium installed).
+let chromiumAvailable = false;
+try { findChrome(); chromiumAvailable = true; } catch { /* no-op */ }
 
 let serverProc;
 
@@ -20,7 +26,7 @@ async function waitFor(url, timeoutMs = 8000) {
   throw new Error(`Server did not become ready at ${url}`);
 }
 
-describe('I2 trip-wire: WebSocket viewer receives a frame within 100ms of launch', () => {
+describe.skipIf(!chromiumAvailable)('I2 trip-wire: WebSocket viewer receives a frame within 100ms of launch', () => {
   beforeAll(async () => {
     serverProc = spawn('node', ['server.js'], {
       env: { ...process.env, BRAINBOW_PORT: String(PORT) },

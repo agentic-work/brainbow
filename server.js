@@ -13,18 +13,18 @@
 
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { createServer } from 'http';
-import { spawn, execFileSync } from 'child_process';
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
-import { fileURLToPath } from 'url';
+import { createServer } from 'node:http';
+import { spawn, execFileSync } from 'node:child_process';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './src/redaction.js';
 import { Session } from './src/session.js';
 import { SessionManager } from './src/session-manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = parseInt(process.env.BRAINBOW_PORT || process.env.GHOST_PORT || '4444');
+const PORT = Number.parseInt(process.env.BRAINBOW_PORT || process.env.GHOST_PORT || '4444');
 const RECORDINGS_DIR = process.env.BRAINBOW_RECORDINGS
   || process.env.GHOST_RECORDINGS
   || path.join(os.tmpdir(), 'brainbow-recordings');
@@ -36,7 +36,7 @@ fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 
 // Check ffmpeg availability
 let hasFFmpeg = false;
-try { execSync('ffmpeg -version', { stdio: 'ignore' }); hasFFmpeg = true; } catch {}
+try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); hasFFmpeg = true; } catch { /* no-op */ }
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -67,7 +67,7 @@ const sessionManager = new SessionManager({ SessionClass: Session, mode: MODE })
 function sessionIdOf(req) {
   return req.query.sessionId
       || req.headers['x-brainbow-session']
-      || (req.body && req.body.sessionId)
+      || req.body?.sessionId
       || 'default';
 }
 
@@ -91,7 +91,7 @@ function requireBrowser(session, res) {
 // ─── Vision config (process-wide) ───────────────────────────────────────────
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const VISION_MODEL = process.env.VISION_MODEL || 'moondream';
-const VISION_INTERVAL = parseInt(process.env.VISION_INTERVAL || '2000');
+const VISION_INTERVAL = Number.parseInt(process.env.VISION_INTERVAL || '2000');
 
 let visionModelReady = false;
 
@@ -125,10 +125,12 @@ async function checkVisionModel() {
 }
 
 // ─── Per-session vision helpers ──────────────────────────────────────────────
-async function describeScreen(session, prompt) {
+const DEFAULT_VISION_PROMPT = 'Describe what you see on this screen. Focus on: what app/page is shown, any error messages, loading states, data displayed, buttons/controls visible. Be concise but thorough.';
+
+async function describeScreen(session, prompt = DEFAULT_VISION_PROMPT) {
   if (!session.lastFrameB64) return 'No browser frame available';
 
-  const userPrompt = prompt || 'Describe what you see on this screen. Focus on: what app/page is shown, any error messages, loading states, data displayed, buttons/controls visible. Be concise but thorough.';
+  const userPrompt = prompt;
 
   try {
     const resp = await fetch(`${OLLAMA_URL}/api/generate`, {
@@ -169,7 +171,7 @@ function requestHumanInput(session, prompt, type = 'text', timeoutMs = 120000) {
     session.log('hitl', `Waiting for user: ${prompt}`);
 
     setTimeout(() => {
-      if (session.hitlPending && session.hitlPending.id === id) {
+      if (session.hitlPending?.id === id) {
         session.hitlPending = null;
         reject(new Error('HITL timeout — user did not respond'));
       }
@@ -184,8 +186,14 @@ function humanSize(bytes) {
   return `${(bytes / 1024).toFixed(0)}KB`;
 }
 
+function gifScaleFor(quality) {
+  if (quality === 'high') return 800;
+  if (quality === 'medium') return 540;
+  return 360;
+}
+
 async function encodeRecording(frames, opts = {}) {
-  const { format = 'gif', quality = 'high', speed = 1.0, zoom, filename } = opts;
+  const { format = 'gif', quality = 'high', speed = 1, zoom, filename } = opts;
   const ts = Date.now();
   const outName = filename || `ghost-${ts}.${format}`;
   const outFile = path.join(RECORDINGS_DIR, outName);
@@ -220,7 +228,7 @@ async function encodeRecording(frames, opts = {}) {
     const cropFilter = zoom ? `crop=${zoom.width}:${zoom.height}:${zoom.x}:${zoom.y},` : '';
 
     if (format === 'gif') {
-      const scale = quality === 'high' ? 800 : quality === 'medium' ? 540 : 360;
+      const scale = gifScaleFor(quality);
       const paletteFile = path.join(tmpDir, 'palette.png');
 
       await runFFmpeg([
@@ -455,8 +463,14 @@ app.post('/api/eval', async (req, res) => {
       const raw = req.body.script || req.body.expression;
       const result = await session.page.evaluate(raw);
       res.json({ ok: true, result, sessionId: session.sessionId });
-    } catch (e2) {
-      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    } catch (fallbackErr) {
+      if (!res.headersSent) {
+        res.status(500).json({
+          ok: false,
+          error: e.message,
+          fallbackError: fallbackErr.message,
+        });
+      }
     }
   }
 });
@@ -509,8 +523,8 @@ app.get('/api/screenshot', async (req, res) => {
   try {
     const fullPage = req.query.full === 'true';
     const format = req.query.format || 'jpeg';
-    const quality = parseInt(req.query.quality || '70');
-    const maxWidth = parseInt(req.query.maxWidth || '0');
+    const quality = Number.parseInt(req.query.quality || '70');
+    const maxWidth = Number.parseInt(req.query.maxWidth || '0');
 
     let buf;
     if (format === 'png') {
@@ -519,7 +533,7 @@ app.get('/api/screenshot', async (req, res) => {
       buf = await session.page.screenshot({ type: 'jpeg', quality: Math.min(quality, 100), fullPage });
     }
 
-    const MAX_BYTES = parseInt(req.query.maxBytes || '300000');
+    const MAX_BYTES = Number.parseInt(req.query.maxBytes || '300000');
     if (buf.length > MAX_BYTES && format !== 'png') {
       buf = await session.page.screenshot({ type: 'jpeg', quality: Math.max(25, quality - 30), fullPage });
     }
@@ -629,7 +643,7 @@ app.post('/api/dialog', async (req, res) => {
 app.get('/api/log', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  const n = parseInt(req.query.n) || 50;
+  const n = Number.parseInt(req.query.n) || 50;
   res.json({ log: session.actionLog.slice(-n), sessionId: session.sessionId });
 });
 
@@ -643,8 +657,8 @@ app.post('/api/find', async (req, res) => {
       const results = await session.page.evaluate((searchText) => {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         const matches = [];
-        let node;
-        while ((node = walker.nextNode()) && matches.length < 20) {
+        let node = walker.nextNode();
+        while (node && matches.length < 20) {
           if (node.textContent.includes(searchText)) {
             const el = node.parentElement;
             const rect = el.getBoundingClientRect();
@@ -654,6 +668,7 @@ app.post('/api/find', async (req, res) => {
               tag: el.tagName.toLowerCase(),
             });
           }
+          node = walker.nextNode();
         }
         return matches;
       }, text);
@@ -710,7 +725,7 @@ app.post('/api/record/stop', async (req, res) => {
   if (!session) return;
   if (!session.recording) return res.status(400).json({ error: 'Not recording' });
 
-  const { format = 'gif', quality = 'high', speed = 1.0, filename } = req.body || {};
+  const { format = 'gif', quality = 'high', speed = 1, filename } = req.body || {};
   session.recording = false;
   const frames = [...session.recordFrames];
   session.recordFrames = [];
@@ -789,7 +804,7 @@ app.get('/api/scripts', (req, res) => {
     const scripts = files.map(f => {
       try {
         const data = JSON.parse(fs.readFileSync(path.join(SCRIPTS_DIR, f), 'utf8'));
-        return { name: data.name || f.replace('.json', ''), file: f, steps: (data.steps || []).length, description: data.description || '' };
+        return { name: data.name || f.replaceAll('.json', ''), file: f, steps: (data.steps || []).length, description: data.description || '' };
       } catch { return { name: f, file: f, steps: 0 }; }
     });
     res.json({ scripts });
@@ -799,7 +814,7 @@ app.get('/api/scripts', (req, res) => {
 app.post('/api/scripts', (req, res) => {
   const { name, description, steps } = req.body;
   if (!name || !steps) return res.status(400).json({ error: 'name and steps required' });
-  const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json';
+  const filename = name.replaceAll(/[^a-zA-Z0-9_-]/g, '_') + '.json';
   fs.writeFileSync(path.join(SCRIPTS_DIR, filename), JSON.stringify({ name, description, steps }, null, 2));
   res.json({ ok: true, file: filename });
 });
@@ -1055,12 +1070,13 @@ app.get('/api/vision/full', async (req, res) => {
 async function clickByText(session, text) {
   const clicked = await session.page.evaluate((searchText) => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
+    let node = walker.nextNode();
+    while (node) {
       if (node.textContent.includes(searchText)) {
         const el = node.parentElement;
         if (el) { el.click(); return true; }
       }
+      node = walker.nextNode();
     }
     return false;
   }, text);

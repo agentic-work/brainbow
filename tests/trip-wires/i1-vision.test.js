@@ -3,10 +3,16 @@ import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { findChrome } from '../../src/session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 15001;
 const FIXTURE = 'file://' + path.join(__dirname, '..', 'fixtures', 'hello.html');
+
+// Trip-wire needs a real Chromium — skip when unavailable
+// (ARC runner pods don't have Chromium installed).
+let chromiumAvailable = false;
+try { findChrome(); chromiumAvailable = true; } catch { /* no-op */ }
 
 let serverProc;
 
@@ -22,7 +28,7 @@ async function waitFor(url, timeoutMs = 8000) {
   throw new Error(`Server did not become ready at ${url} within ${timeoutMs}ms`);
 }
 
-describe('I1 trip-wire: frame endpoint always returns an image', () => {
+describe.skipIf(!chromiumAvailable)('I1 trip-wire: frame endpoint always returns an image', () => {
   beforeAll(async () => {
     serverProc = spawn('node', ['server.js'], {
       env: { ...process.env, BRAINBOW_PORT: String(PORT) },

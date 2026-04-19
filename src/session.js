@@ -6,10 +6,10 @@
 // server.js moves here so multi-session works with no rewrite (spec §7).
 
 import puppeteer from 'puppeteer-core';
-import { execSync } from 'child_process';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { redactSecrets } from './redaction.js';
 
 const CHROME_CANDIDATES = [

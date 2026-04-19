@@ -15,12 +15,12 @@
  * instanceof checks) is safe.
  */
 export const SECRET_PATTERNS = [
-  /(?:password|passwd|pwd|pass|secret|token|api[_-]?key|auth|bearer|credential)[\s]*[=:]["']?\s*\S+/gi,
+  /(?:password|passwd|pwd|pass|secret|token|api[_-]?key|auth|bearer|credential)\s*[=:]["']?\s*\S+/gi,
   /Bearer\s+[A-Za-z0-9._-]+/gi,
   /(?:awc_|sk-|pk-|ghp_|gho_|github_pat_|xox[bpars]-)[A-Za-z0-9_-]{10,}/g,
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-  /(?:client[_-]?secret|access[_-]?key|secret[_-]?key)[\s]*[=:]["']?\s*\S+/gi,
+  /(?:client[_-]?secret|access[_-]?key|secret[_-]?key)\s*[=:]["']?\s*\S+/gi,
   /(?:password|pwd)=[^&;\s"']+/gi,
   /[?&](?:client_id|tenant|state|code|nonce|id_token|access_token|refresh_token|assertion)=[^&\s"']+/gi,
   /login\.microsoftonline\.com\/[0-9a-f-]{36}/gi,
