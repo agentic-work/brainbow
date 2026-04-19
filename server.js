@@ -463,12 +463,12 @@ app.post('/api/eval', async (req, res) => {
       const raw = req.body.script || req.body.expression;
       const result = await session.page.evaluate(raw);
       res.json({ ok: true, result, sessionId: session.sessionId });
-    } catch (fallbackErr) {
+    } catch (error_) {
       if (!res.headersSent) {
         res.status(500).json({
           ok: false,
           error: e.message,
-          fallbackError: fallbackErr.message,
+          error_or: error_.message,
         });
       }
     }
@@ -516,6 +516,41 @@ app.get('/api/page', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+async function captureAndCompress(page, { format, quality, fullPage, maxBytes }) {
+  if (format === 'png') return page.screenshot({ type: 'png', fullPage });
+  let buf = await page.screenshot({ type: 'jpeg', quality: Math.min(quality, 100), fullPage });
+  if (buf.length > maxBytes) {
+    buf = await page.screenshot({ type: 'jpeg', quality: Math.max(25, quality - 30), fullPage });
+  }
+  if (buf.length > maxBytes) {
+    buf = await page.screenshot({ type: 'jpeg', quality: 15, fullPage });
+  }
+  return buf;
+}
+
+function downscaleWithFFmpeg(buf, maxWidth) {
+  const ts = Date.now();
+  const tmpIn = path.join(os.tmpdir(), `ghost_in_${ts}.jpg`);
+  const tmpOut = path.join(os.tmpdir(), `ghost_out_${ts}.jpg`);
+  fs.writeFileSync(tmpIn, buf);
+  const wRaw = Number.isFinite(maxWidth) ? Math.floor(maxWidth) : 0;
+  const w = wRaw > 0 && wRaw <= 4096 ? wRaw : 1024;
+  try {
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
+    // — execFileSync with a fixed binary + argv array: no shell, no interpolation.
+    //   `w` is a clamped integer; tmpIn/tmpOut are server-generated paths.
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-i', tmpIn, '-vf', `scale=${w}:-1`, '-q:v', '6', tmpOut],
+      { stdio: 'ignore' },
+    );
+    return fs.readFileSync(tmpOut);
+  } finally {
+    try { fs.unlinkSync(tmpIn); } catch { /* best-effort */ }
+    try { fs.unlinkSync(tmpOut); } catch { /* best-effort */ }
+  }
+}
+
 app.get('/api/screenshot', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
@@ -525,41 +560,13 @@ app.get('/api/screenshot', async (req, res) => {
     const format = req.query.format || 'jpeg';
     const quality = Number.parseInt(req.query.quality || '70');
     const maxWidth = Number.parseInt(req.query.maxWidth || '0');
+    const maxBytes = Number.parseInt(req.query.maxBytes || '300000');
 
-    let buf;
-    if (format === 'png') {
-      buf = await session.page.screenshot({ type: 'png', fullPage });
-    } else {
-      buf = await session.page.screenshot({ type: 'jpeg', quality: Math.min(quality, 100), fullPage });
-    }
+    let buf = await captureAndCompress(session.page, { format, quality, fullPage, maxBytes });
 
-    const MAX_BYTES = Number.parseInt(req.query.maxBytes || '300000');
-    if (buf.length > MAX_BYTES && format !== 'png') {
-      buf = await session.page.screenshot({ type: 'jpeg', quality: Math.max(25, quality - 30), fullPage });
-    }
-    if (buf.length > MAX_BYTES && format !== 'png') {
-      buf = await session.page.screenshot({ type: 'jpeg', quality: 15, fullPage });
-    }
-    if ((buf.length > MAX_BYTES || maxWidth > 0) && hasFFmpeg) {
-      try {
-        const ts = Date.now();
-        const tmpIn = path.join(os.tmpdir(), `ghost_in_${ts}.jpg`);
-        const tmpOut = path.join(os.tmpdir(), `ghost_out_${ts}.jpg`);
-        fs.writeFileSync(tmpIn, buf);
-        const wRaw = Number.isFinite(maxWidth) ? Math.floor(maxWidth) : 0;
-        const w = wRaw > 0 && wRaw <= 4096 ? wRaw : 1024;
-        // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
-        // — execFileSync with a fixed binary + argv array: no shell, no interpolation.
-        //   `w` is a clamped integer; tmpIn/tmpOut are server-generated paths.
-        execFileSync(
-          'ffmpeg',
-          ['-y', '-i', tmpIn, '-vf', `scale=${w}:-1`, '-q:v', '6', tmpOut],
-          { stdio: 'ignore' },
-        );
-        buf = fs.readFileSync(tmpOut);
-        fs.unlinkSync(tmpIn);
-        fs.unlinkSync(tmpOut);
-      } catch { /* fallback to original buf */ }
+    const shouldDownscale = format !== 'png' && (buf.length > maxBytes || maxWidth > 0);
+    if (shouldDownscale && hasFFmpeg) {
+      try { buf = downscaleWithFFmpeg(buf, maxWidth); } catch { /* fallback to original */ }
     }
 
     res.set('Content-Type', format === 'png' ? 'image/png' : 'image/jpeg');
@@ -700,7 +707,8 @@ app.post('/api/record/start', async (req, res) => {
   session.recordStartTime = Date.now();
   session.recordZoom = zoom || null;
 
-  session.log('record-start', `${session.recordZoom ? `zoom=${JSON.stringify(session.recordZoom)}` : 'full viewport'}`);
+  const zoomLabel = session.recordZoom ? `zoom=${JSON.stringify(session.recordZoom)}` : 'full viewport';
+  session.log('record-start', zoomLabel);
   session.broadcast({ type: 'recording', state: 'started' });
   res.json({ ok: true, recording: true, sessionId: session.sessionId });
 });
@@ -842,7 +850,7 @@ app.post('/api/scripts/:name/run', async (req, res) => {
   // with a clear message — otherwise each browser-touching step fails with
   // a null-dereference that gets returned as an opaque per-step error.
   const firstStep = script.steps[0];
-  const scriptNeedsExistingBrowser = !firstStep || firstStep.action !== 'goto';
+  const scriptNeedsExistingBrowser = firstStep?.action !== 'goto';
   if (scriptNeedsExistingBrowser && !session.page) {
     return res.status(400).json({
       error: 'No browser open. POST /api/launch first, or start the script with a goto step.',
@@ -857,8 +865,8 @@ app.post('/api/scripts/:name/run', async (req, res) => {
       let result;
 
       if (action === 'goto') {
-        if (!session.page) await session.launch({ url: params.url });
-        else await session.page.goto(params.url, { waitUntil: params.waitUntil || 'domcontentloaded', timeout: 30000 });
+        if (session.page) await session.page.goto(params.url, { waitUntil: params.waitUntil || 'domcontentloaded', timeout: 30000 });
+        else await session.launch({ url: params.url });
         result = { ok: true };
       } else if (action === 'click') {
         if (params.text) await clickByText(session, params.text);
@@ -1095,8 +1103,9 @@ app.get('/', (req, res) => {
 // Manual upgrade handler so we can parse sessionId from /ws/:sessionId.
 // noServer: true means the ws library does NOT auto-attach, so this is the
 // only upgrade handler — no race condition.
+const WS_PATH_RE = /^\/ws(?:\/([^/?#]+))?/;
 server.on('upgrade', (request, socket, head) => {
-  const match = request.url && request.url.match(/^\/ws(?:\/([^/?#]+))?/);
+  const match = WS_PATH_RE.exec(request.url ?? '');
   if (!match) {
     socket.destroy();
     return;
