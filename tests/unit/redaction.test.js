@@ -48,6 +48,13 @@ describe('redactSecrets', () => {
     expect(redactSecrets('ghp_abc1234567890xyzABCDEF')).not.toContain('ghp_abc1234567890xyzABCDEF');
   });
 
+  it('fully redacts short Bearer tokens (≤8 chars total)', () => {
+    // "Bearer a" — matches the Bearer pattern but length is 8, not > 8,
+    // so the catch-all '******' branch hits. No prefix-preserve here.
+    expect(redactSecrets('Authorization: Bearer a')).toContain('******');
+    expect(redactSecrets('Authorization: Bearer a')).not.toContain('Bearer a');
+  });
+
   it('redacts sk- API keys', () => {
     expect(redactSecrets('sk-proj-abc1234567890')).not.toContain('sk-proj-abc1234567890');
   });

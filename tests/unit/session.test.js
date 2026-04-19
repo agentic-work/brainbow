@@ -58,4 +58,119 @@ describe('Session', () => {
     expect(a.lastFrameB64).toBe('frame-a');
     expect(b.lastFrameB64).toBe('frame-b');
   });
+
+  // Teardown paths — exercise the state-cleanup branches that the
+  // integration/trip-wire suites would normally drive through a real
+  // Chromium. Injecting fake interval handles + CDP stubs lets the unit
+  // tier cover close() + stopScreencast() without a browser.
+
+  it('stopScreencast clears a polling fallback interval', async () => {
+    let cleared = false;
+    const fakeInterval = setInterval(() => {}, 1_000);
+    session._fallbackInterval = fakeInterval;
+    session.screencastRunning = true;
+    session.cdpSession = { send: async () => { cleared = true; } };
+    await session.stopScreencast();
+    expect(session._fallbackInterval).toBe(null);
+    expect(session.screencastRunning).toBe(false);
+    expect(cleared).toBe(true);
+  });
+
+  it('stopScreencast swallows CDP errors', async () => {
+    session._fallbackInterval = null;
+    session.screencastRunning = true;
+    session.cdpSession = { send: async () => { throw new Error('cdp gone'); } };
+    await expect(session.stopScreencast()).resolves.toBeUndefined();
+    expect(session.screencastRunning).toBe(false);
+  });
+
+  it('close() clears visionInterval and closes the mock browser', async () => {
+    let closed = false;
+    session.visionInterval = setInterval(() => {}, 1_000);
+    session.browser = { close: async () => { closed = true; } };
+    session.page = { fake: true };
+    session.cdpSession = { fake: true };
+    session.recording = true;
+    session.recordFrames = [{ ts: 1, data: 'x' }];
+    await session.close();
+    expect(session.visionInterval).toBe(null);
+    expect(session.browser).toBe(null);
+    expect(session.page).toBe(null);
+    expect(session.cdpSession).toBe(null);
+    expect(session.recording).toBe(false);
+    expect(session.recordFrames).toEqual([]);
+    expect(closed).toBe(true);
+  });
+
+  it('close() swallows browser.close errors', async () => {
+    session.browser = { close: async () => { throw new Error('browser already dead'); } };
+    session.page = { fake: true };
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(session.browser).toBe(null);
+  });
+
+  it('startScreenshotFallback is idempotent', () => {
+    session.startScreenshotFallback();
+    const first = session._fallbackInterval;
+    session.startScreenshotFallback();
+    expect(session._fallbackInterval).toBe(first);
+    clearInterval(session._fallbackInterval);
+    session._fallbackInterval = null;
+  });
+
+  it('screenshot fallback captures frames when page is present', async () => {
+    const frames = [];
+    session.page = {
+      screenshot: async () => Buffer.from('testjpeg-bytes'),
+    };
+    session.broadcast = (msg) => frames.push(msg);
+
+    session.startScreenshotFallback();
+    // Let the 100ms interval fire at least once
+    await new Promise((r) => setTimeout(r, 180));
+    clearInterval(session._fallbackInterval);
+    session._fallbackInterval = null;
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[0].type).toBe('frame');
+    expect(frames[0].data).toMatch(/^[A-Za-z0-9+/]/);
+  });
+
+  it('startScreencast falls back to screenshot polling when CDP throws', async () => {
+    const originalError = console.error;
+    console.error = () => {};          // silence the logged failure
+    try {
+      session.page = {
+        createCDPSession: async () => { throw new Error('no CDP'); },
+        screenshot: async () => Buffer.from('snap'),
+      };
+      await session.startScreencast();
+      expect(session._fallbackInterval).not.toBe(null);
+      expect(session.screencastRunning).toBe(false);
+    } finally {
+      if (session._fallbackInterval) clearInterval(session._fallbackInterval);
+      session._fallbackInterval = null;
+      console.error = originalError;
+    }
+  });
+
+  it('startScreencast is a no-op when no page is attached', async () => {
+    session.page = null;
+    await session.startScreencast();
+    expect(session.screencastRunning).toBe(false);
+    expect(session._fallbackInterval).toBeFalsy();
+  });
+
+  it('screenshot fallback no-ops when page is missing', async () => {
+    session.page = null;
+    session.broadcast = () => {
+      throw new Error('should not broadcast when page is null');
+    };
+    session.startScreenshotFallback();
+    await new Promise((r) => setTimeout(r, 180));
+    clearInterval(session._fallbackInterval);
+    session._fallbackInterval = null;
+    // If we got here without throwing, the null-page branch ran.
+    expect(true).toBe(true);
+  });
 });

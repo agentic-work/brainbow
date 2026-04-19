@@ -77,4 +77,32 @@ describe('SessionManager', () => {
     const s = await mgr.get();
     expect(s.sessionId).toBe('default');
   });
+
+  it('throws when constructed without a SessionClass dependency', () => {
+    expect(() => new SessionManager({})).toThrow(/SessionClass dependency/);
+    expect(() => new SessionManager()).toThrow(/SessionClass dependency/);
+  });
+
+  it('create() is idempotent — returns same instance if already exists', async () => {
+    const cloudMgr = new SessionManager({ SessionClass: StubSession, mode: 'cloud' });
+    const a = await cloudMgr.create('id1');
+    const b = await cloudMgr.create('id1');
+    expect(a).toBe(b);
+    await cloudMgr.closeAll();
+  });
+
+  it('remove() is a no-op when sessionId is unknown', async () => {
+    await expect(mgr.remove('not-there')).resolves.toBeUndefined();
+  });
+
+  it('remove() swallows close() errors from a dying session', async () => {
+    class ThrowOnClose {
+      constructor(id) { this.sessionId = id; }
+      async close() { throw new Error('already gone'); }
+    }
+    const m = new SessionManager({ SessionClass: ThrowOnClose, mode: 'local' });
+    await m.get('x');
+    await expect(m.remove('x')).resolves.toBeUndefined();
+    expect(m.list()).toEqual([]);
+  });
 });
