@@ -14,7 +14,7 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
-import { spawn, execSync } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -532,8 +532,16 @@ app.get('/api/screenshot', async (req, res) => {
         const tmpIn = path.join(os.tmpdir(), `ghost_in_${ts}.jpg`);
         const tmpOut = path.join(os.tmpdir(), `ghost_out_${ts}.jpg`);
         fs.writeFileSync(tmpIn, buf);
-        const w = maxWidth > 0 ? maxWidth : 1024;
-        execSync(`ffmpeg -y -i ${tmpIn} -vf scale=${w}:-1 -q:v 6 ${tmpOut} 2>/dev/null`);
+        const wRaw = Number.isFinite(maxWidth) ? Math.floor(maxWidth) : 0;
+        const w = wRaw > 0 && wRaw <= 4096 ? wRaw : 1024;
+        // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
+        // — execFileSync with a fixed binary + argv array: no shell, no interpolation.
+        //   `w` is a clamped integer; tmpIn/tmpOut are server-generated paths.
+        execFileSync(
+          'ffmpeg',
+          ['-y', '-i', tmpIn, '-vf', `scale=${w}:-1`, '-q:v', '6', tmpOut],
+          { stdio: 'ignore' },
+        );
         buf = fs.readFileSync(tmpOut);
         fs.unlinkSync(tmpIn);
         fs.unlinkSync(tmpOut);
@@ -541,7 +549,8 @@ app.get('/api/screenshot', async (req, res) => {
     }
 
     res.set('Content-Type', format === 'png' ? 'image/png' : 'image/jpeg');
-    res.send(buf);
+    // `buf` is an image Buffer, not user-supplied string content; Content-Type above prevents HTML sniffing.
+    res.send(buf); // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -751,9 +760,18 @@ app.get('/api/recordings', (req, res) => {
 });
 
 app.get('/api/recordings/:name', (req, res) => {
-  const filePath = path.join(RECORDINGS_DIR, path.basename(req.params.name));
+  const safeName = path.basename(req.params.name);
+  if (!/^[A-Za-z0-9._-]+$/.test(safeName)) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+  const recordingsRoot = path.resolve(RECORDINGS_DIR);
+  // safeName already basename-stripped + charset-allowlisted above.
+  const filePath = path.resolve(recordingsRoot, safeName); // nosemgrep: javascript.express.security.audit.express-path-join-resolve-traversal.express-path-join-resolve-traversal
+  if (!filePath.startsWith(recordingsRoot + path.sep)) {
+    return res.status(400).json({ error: 'Path traversal' });
+  }
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
-  res.sendFile(filePath);
+  res.sendFile(filePath); // nosemgrep: javascript.express.security.audit.express-res-sendfile.express-res-sendfile
 });
 
 // ─── Scripts Engine (repeatable macros) ─────────────────────────────────────
@@ -790,8 +808,16 @@ app.post('/api/scripts/:name/run', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
 
-  const filename = req.params.name.endsWith('.json') ? req.params.name : req.params.name + '.json';
-  const filepath = path.join(SCRIPTS_DIR, filename);
+  const rawName = path.basename(req.params.name);
+  if (!/^[A-Za-z0-9._-]+$/.test(rawName)) {
+    return res.status(400).json({ error: 'Invalid script name' });
+  }
+  const filename = rawName.endsWith('.json') ? rawName : rawName + '.json';
+  const scriptsRoot = path.resolve(SCRIPTS_DIR);
+  const filepath = path.resolve(scriptsRoot, filename); // nosemgrep: javascript.express.security.audit.express-path-join-resolve-traversal.express-path-join-resolve-traversal
+  if (!filepath.startsWith(scriptsRoot + path.sep)) {
+    return res.status(400).json({ error: 'Path traversal' });
+  }
   if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'Script not found' });
 
   const script = JSON.parse(fs.readFileSync(filepath, 'utf8'));
