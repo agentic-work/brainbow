@@ -83,6 +83,14 @@ export class Session {
     this.visionInterval = null;
     this.visionError = null;
 
+    // Console messages captured from the page — ring buffer of the last
+    // N log/warn/error entries. Populated on launch() via the console
+    // event listener. Exposed via GET /api/console for agents that
+    // need to verify page-side state (e.g. "did the app hit a React
+    // warning during this turn?") without opening DevTools.
+    this.consoleMessages = [];
+    this.maxConsoleSize = 200;
+
     // Subscribers (WebSocket viewers tied to this session)
     this.subscribers = new Set();
   }
@@ -149,6 +157,30 @@ export class Session {
       this.log('dialog', `${dialog.type()}: ${dialog.message()}`);
       this.broadcast({ type: 'dialog', dialogType: dialog.type(), message: dialog.message() });
     });
+    // Capture console output — ring buffer exposed via /api/console.
+    this.page.on('console', (msg) => {
+      const entry = {
+        ts: Date.now(),
+        type: msg.type(),                       // log | warning | error | info | debug
+        text: String(msg.text()).slice(0, 1000),
+        location: msg.location()?.url || '',
+      };
+      this.consoleMessages.push(entry);
+      if (this.consoleMessages.length > this.maxConsoleSize) {
+        this.consoleMessages.shift();
+      }
+    });
+    this.page.on('pageerror', (err) => {
+      this.consoleMessages.push({
+        ts: Date.now(),
+        type: 'pageerror',
+        text: String(err.message || err).slice(0, 1000),
+        location: '',
+      });
+      if (this.consoleMessages.length > this.maxConsoleSize) {
+        this.consoleMessages.shift();
+      }
+    });
 
     if (opts.url) {
       await this.page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -206,6 +238,51 @@ export class Session {
       clearInterval(this._fallbackInterval);
       this._fallbackInterval = null;
     }
+  }
+
+  /**
+   * Resize the viewport on an active browser session.
+   *
+   * Why this is a first-class action (not just "relaunch with new dims"):
+   * the caller shouldn't have to teardown + rebuild the session (losing
+   * cookies, page state, scroll, etc.) just to swap from 1280×720 to
+   * 1600×1000. Flow: stop the screencast → set the page viewport →
+   * restart the screencast at the new max-dims so the frame buffer
+   * starts pushing at the right resolution immediately.
+   */
+  async resize(width, height) {
+    if (!this.page) throw new Error('No browser open. launch() first.');
+    const w = Math.max(320, Math.min(4096, Math.round(Number(width))));
+    const h = Math.max(240, Math.min(4096, Math.round(Number(height))));
+    if (!Number.isFinite(w) || !Number.isFinite(h)) {
+      throw new Error(`Invalid resize dims: ${width}x${height}`);
+    }
+    await this.stopScreencast();
+    this.viewport = { width: w, height: h };
+    await this.page.setViewport({ width: w, height: h });
+    await this.startScreencast();
+    this.log('resize', `${w}x${h}`);
+    return { ok: true, width: w, height: h };
+  }
+
+  /**
+   * Accessibility-tree snapshot — mirrors the shape Playwright's
+   * browser_snapshot returns: a JSON tree of role/name/value/children.
+   * Handy for agents that want to pick elements by role without CSS
+   * selectors. Puppeteer exposes this via `page.accessibility.snapshot`.
+   */
+  async snapshot(opts = {}) {
+    if (!this.page) throw new Error('No browser open. launch() first.');
+    const tree = await this.page.accessibility.snapshot({
+      interestingOnly: opts.interestingOnly !== false,
+      root: undefined,
+    });
+    return {
+      url: this.page.url(),
+      title: await this.page.title().catch(() => ''),
+      viewport: { ...this.viewport },
+      tree,
+    };
   }
 
   async close() {

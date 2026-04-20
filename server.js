@@ -344,6 +344,93 @@ app.post('/api/goto', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * POST /api/resize { width, height }
+ *
+ * Resize the viewport of a running session without losing page state.
+ * Agents (and humans) use this when they need a different aspect ratio
+ * or more room to scan a UI — e.g., "resize to 1920x1200 to capture a
+ * full admin dashboard screenshot". Screencast auto-restarts at the new
+ * dims so the next `/api/screen` + `/api/frame` returns the right size.
+ *
+ * Unlike Playwright MCP's `browser_resize` which silently resets on
+ * context rebuild, this persists on Session until the next resize or
+ * close.
+ */
+app.post('/api/resize', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const { width, height } = req.body || {};
+    if (!width || !height) {
+      return res.status(400).json({ error: 'width and height required in body' });
+    }
+    const result = await session.resize(width, height);
+    res.json({ ...result, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * GET|POST /api/snapshot — accessibility tree of the live page.
+ *
+ * Mirrors Playwright MCP's `browser_snapshot` shape: returns
+ * { url, title, viewport, tree } where `tree` is the Chromium
+ * accessibility tree serialized to JSON. Agents can pick elements
+ * by role/name without writing CSS selectors.
+ *
+ * Optional body: { interestingOnly: boolean } — when false, returns
+ * the full DOM a11y tree (large); defaults to true which filters to
+ * actionable/meaningful nodes only.
+ */
+app.post('/api/snapshot', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const result = await session.snapshot(req.body || {});
+    res.json({ ...result, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/snapshot', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const result = await session.snapshot({});
+    res.json({ ...result, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * GET /api/console — ring buffer of the last N page-side console
+ * messages captured since session launch. Supports ?level=error|warn
+ * filters and ?limit=N head-limit for large dumps.
+ */
+app.get('/api/console', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const level = String(req.query.level || '').toLowerCase();
+    const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit || '200')));
+    let msgs = session.consoleMessages || [];
+    if (level) {
+      const wanted = new Set(
+        level === 'error' ? ['error', 'pageerror'] :
+        level === 'warn' || level === 'warning' ? ['warning', 'warn'] :
+        [level]
+      );
+      msgs = msgs.filter((m) => wanted.has(m.type));
+    }
+    res.json({
+      count: msgs.length,
+      messages: msgs.slice(-limit),
+      sessionId: session.sessionId,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Hard reload — bypass all caches
 app.post('/api/reload', async (req, res) => {
   const session = await getSession(req, res);
