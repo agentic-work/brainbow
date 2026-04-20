@@ -681,7 +681,26 @@ app.post('/api/type', async (req, res) => {
   if (!session) return;
   if (!requireBrowser(session, res)) return;
   try {
-    const { selector, text, value, delay = 0, clear = false } = req.body;
+    const {
+      selector,
+      text,
+      value,
+      delay = 0,
+      clear = false,
+      // When submit is true, press Enter after typing. Used to get
+      // past gates like MS login where the "Next" button is a form
+      // submit. We delay 150ms between last keystroke and Enter so
+      // React/Angular forms have time to commit the input's value to
+      // their internal state — Microsoft's login in particular
+      // validates the framework-held value, not the DOM value, and
+      // races otherwise. Caller can override with submitDelayMs.
+      submit = false,
+      submitDelayMs = 150,
+      // For frameworks that only react to programmatic input events
+      // (React tracks input-value with a proxy); dispatch a synthetic
+      // 'input' + 'change' + 'blur' after page.type so onChange fires.
+      dispatchEvents = true,
+    } = req.body;
     const content = value || text;
     let isPasswordField = selector && /password|passwd|secret|token|api[_-]?key|credential/i.test(selector);
     if (!isPasswordField && selector) {
@@ -692,21 +711,43 @@ app.post('/api/type', async (req, res) => {
     const safeContent = isPasswordField ? '******' : content?.substring(0, 50);
     const safeSelector = selector ? redactSecrets(selector) : '';
     if (selector) {
-      session.log('type', `${safeSelector} = "${safeContent}"`);
+      session.log('type', `${safeSelector} = "${safeContent}"${submit ? ' [submit]' : ''}`);
       if (clear) {
         await session.page.click(selector, { clickCount: 3 });
         await session.page.keyboard.press('Backspace');
       }
       await session.page.type(selector, content, { delay });
+      if (dispatchEvents) {
+        // Force React/Angular/Vue form state sync. page.type fires real
+        // keydown/keypress/input/keyup events per char, which React sees
+        // via its synthetic event system — but only if the component
+        // subscribed to the native input event. Belt + suspenders: also
+        // dispatch a programmatic input event that mirrors the DOM
+        // value, plus a blur to trigger any on-blur validators.
+        try {
+          await session.page.$eval(selector, (el) => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          });
+        } catch { /* selector might have scrolled; non-fatal */ }
+      }
     } else {
-      session.log('type', `keyboard: "${safeContent}"`);
+      session.log('type', `keyboard: "${safeContent}"${submit ? ' [submit]' : ''}`);
       await session.page.keyboard.type(content, { delay });
+    }
+    if (submit) {
+      await new Promise(r => setTimeout(r, submitDelayMs));
+      await session.page.keyboard.press('Enter');
     }
     res.json({ ok: true, sessionId: session.sessionId });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/key', async (req, res) => {
+// /api/key and its alias /api/keyboard — older clients used
+// /api/keyboard which didn't exist and returned a 404 HTML page that
+// looked like success to JSON-parsers. Accept both names now so no
+// caller silently misses keypresses.
+const handleKey = async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
   if (!requireBrowser(session, res)) return;
@@ -717,7 +758,9 @@ app.post('/api/key', async (req, res) => {
     await new Promise(r => setTimeout(r, 100));
     res.json({ ok: true, sessionId: session.sessionId });
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
+};
+app.post('/api/key', handleKey);
+app.post('/api/keyboard', handleKey);
 
 app.post('/api/scroll', async (req, res) => {
   const session = await getSession(req, res);
