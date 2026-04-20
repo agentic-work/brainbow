@@ -332,6 +332,63 @@ app.post('/api/close', async (req, res) => {
   res.json({ ok: true, sessionId: sid });
 });
 
+/**
+ * Multi-tab endpoints — all actions target the active tab by default,
+ * so existing click/type/goto calls don't need to care about tabs.
+ * `GET /api/tabs`     → list tabs (index, active, url, title)
+ * `POST /api/tabs/new`   { url?, activate? } → open a new tab
+ * `POST /api/tabs/switch` { index } → activate a tab (restarts screencast on it)
+ * `POST /api/tabs/close`  { index } → close a tab (can't close the last one)
+ */
+app.get('/api/tabs', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const tabs = await session.listTabs();
+    res.json({ tabs, count: tabs.length, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/tabs/new', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const { url, activate } = req.body || {};
+    const result = await session.openTab({ url, activate });
+    res.json({ ...result, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/tabs/switch', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const { index } = req.body || {};
+    if (typeof index !== 'number') {
+      return res.status(400).json({ error: '{index} number required' });
+    }
+    const result = await session.switchTab(index);
+    res.json({ ...result, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/tabs/close', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const { index } = req.body || {};
+    if (typeof index !== 'number') {
+      return res.status(400).json({ error: '{index} number required' });
+    }
+    const result = await session.closeTab(index);
+    res.json({ ...result, sessionId: session.sessionId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/goto', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;

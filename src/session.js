@@ -12,6 +12,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { redactSecrets } from './redaction.js';
 
+// When BRAINBOW_FRAME_LOG is set, Session writes one NDJSON line per
+// unique screencast frame: { ts, sessionId, tabIndex, url, path }. The
+// `path` is a per-frame PNG written to /tmp/brainbow-frames/. Agents
+// that want to watch the stream live can `Monitor` this file and
+// Read each line's `path` as a new frame arrives — closest thing to
+// "see it live" available through request/response tool protocols.
+// Left OFF by default (no disk IO impact); opt-in via env.
+const FRAME_LOG_PATH = process.env.BRAINBOW_FRAME_LOG || '';
+const FRAME_LOG_SAMPLE_MS = Number.parseInt(process.env.BRAINBOW_FRAME_LOG_SAMPLE_MS || '400');
+const FRAME_LOG_DIR = path.join(os.tmpdir(), 'brainbow-frames');
+if (FRAME_LOG_PATH) {
+  try { fs.mkdirSync(FRAME_LOG_DIR, { recursive: true }); } catch {}
+}
+
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
   '/usr/bin/chromium',
@@ -57,9 +71,14 @@ export class Session {
     this.maxFrameBufferSize = opts.maxFrameBufferSize ?? DEFAULT_FRAME_BUFFER;
     this.maxActionLogSize = opts.maxActionLogSize ?? DEFAULT_ACTION_LOG;
 
-    // Browser state — lazy
+    // Browser state — lazy.
+    // `tabs` tracks every open page so /api/tabs/* can list/switch/close.
+    // `page` is a plain property that always points at the currently
+    // active tab; all existing endpoints use it and don't need to know
+    // that multi-tab exists unless they care.
     this.browser = null;
     this.page = null;
+    this.tabs = [];
     this.cdpSession = null;
     this.screencastRunning = false;
 
@@ -98,6 +117,12 @@ export class Session {
 
     // Subscribers (WebSocket viewers tied to this session)
     this.subscribers = new Set();
+
+    // Last-frame-log write timestamp (ms). The CDP screencast fires at
+    // ~30fps; writing every single frame to disk would thrash IO. We
+    // sample at FRAME_LOG_SAMPLE_MS (default 400ms = ~2.5fps) which
+    // gives an agent enough granularity to "watch" without overwhelming.
+    this._lastFrameLogTs = 0;
   }
 
   pushFrame(base64Data, ts = Date.now()) {
@@ -108,6 +133,23 @@ export class Session {
     }
     if (this.recording) {
       this.recordFrames.push({ data: base64Data, ts: Date.now() - this.recordStartTime });
+    }
+    // Live-frame-log: sampled, opt-in. Writes one PNG per sampled
+    // frame and appends an NDJSON line for agents Monitoring.
+    if (FRAME_LOG_PATH && ts - this._lastFrameLogTs >= FRAME_LOG_SAMPLE_MS) {
+      this._lastFrameLogTs = ts;
+      try {
+        const framePath = path.join(FRAME_LOG_DIR, `${this.sessionId}-${ts}.jpg`);
+        fs.writeFileSync(framePath, Buffer.from(base64Data, 'base64'));
+        const line = JSON.stringify({
+          ts,
+          sessionId: this.sessionId,
+          tabIndex: this.tabs?.indexOf(this.page) ?? 0,
+          url: this.page?.url?.() || '',
+          path: framePath,
+        }) + '\n';
+        fs.appendFileSync(FRAME_LOG_PATH, line);
+      } catch { /* disk full / perm issue → silently skip */ }
     }
   }
 
@@ -154,38 +196,11 @@ export class Session {
       ],
     });
 
-    this.page = (await this.browser.pages())[0] || await this.browser.newPage();
-    await this.page.setViewport({ width, height });
-
-    this.page.on('load', () => this.log('page-load', this.page.url()));
-    this.page.on('dialog', async (dialog) => {
-      this.log('dialog', `${dialog.type()}: ${dialog.message()}`);
-      this.broadcast({ type: 'dialog', dialogType: dialog.type(), message: dialog.message() });
-    });
-    // Capture console output — ring buffer exposed via /api/console.
-    this.page.on('console', (msg) => {
-      const entry = {
-        ts: Date.now(),
-        type: msg.type(),                       // log | warning | error | info | debug
-        text: String(msg.text()).slice(0, 1000),
-        location: msg.location()?.url || '',
-      };
-      this.consoleMessages.push(entry);
-      if (this.consoleMessages.length > this.maxConsoleSize) {
-        this.consoleMessages.shift();
-      }
-    });
-    this.page.on('pageerror', (err) => {
-      this.consoleMessages.push({
-        ts: Date.now(),
-        type: 'pageerror',
-        text: String(err.message || err).slice(0, 1000),
-        location: '',
-      });
-      if (this.consoleMessages.length > this.maxConsoleSize) {
-        this.consoleMessages.shift();
-      }
-    });
+    const firstPage = (await this.browser.pages())[0] || await this.browser.newPage();
+    await firstPage.setViewport({ width, height });
+    this.attachPageListeners(firstPage);
+    this.tabs = [firstPage];
+    this.page = firstPage;
 
     if (opts.url) {
       await this.page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -193,6 +208,122 @@ export class Session {
 
     await this.startScreencast();
     return { ok: true, url: this.page.url() };
+  }
+
+  /**
+   * Attach load / dialog / console / pageerror listeners to a page.
+   * Called on every tab (not just the first) so console + log events
+   * from ANY tab land in the session's shared ring buffers.
+   */
+  attachPageListeners(page) {
+    page.on('load', () => this.log('page-load', page.url()));
+    page.on('dialog', async (dialog) => {
+      this.log('dialog', `${dialog.type()}: ${dialog.message()}`);
+      this.broadcast({ type: 'dialog', dialogType: dialog.type(), message: dialog.message() });
+    });
+    page.on('console', (msg) => {
+      const entry = {
+        ts: Date.now(),
+        type: msg.type(),
+        text: String(msg.text()).slice(0, 1000),
+        location: msg.location()?.url || '',
+        tabIndex: this.tabs.indexOf(page),
+      };
+      this.consoleMessages.push(entry);
+      if (this.consoleMessages.length > this.maxConsoleSize) {
+        this.consoleMessages.shift();
+      }
+    });
+    page.on('pageerror', (err) => {
+      this.consoleMessages.push({
+        ts: Date.now(),
+        type: 'pageerror',
+        text: String(err.message || err).slice(0, 1000),
+        location: '',
+        tabIndex: this.tabs.indexOf(page),
+      });
+      if (this.consoleMessages.length > this.maxConsoleSize) {
+        this.consoleMessages.shift();
+      }
+    });
+  }
+
+  /**
+   * Open a new tab in the same browser. By default the new tab
+   * becomes the active one (so subsequent click/type/goto target
+   * it), matching Chrome's "open in new tab" UX. Pass
+   * `{ activate: false }` to open in background.
+   */
+  async openTab({ url, activate = true } = {}) {
+    if (!this.browser) throw new Error('No browser open. launch() first.');
+    const page = await this.browser.newPage();
+    await page.setViewport({ ...this.viewport });
+    this.attachPageListeners(page);
+    this.tabs.push(page);
+    const index = this.tabs.length - 1;
+    if (url) {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
+    this.log('tab-open', `#${index} ${url || 'about:blank'}`);
+    if (activate) {
+      await this.switchTab(index);
+    }
+    return { index, url: page.url(), title: await page.title().catch(() => '') };
+  }
+
+  /**
+   * Switch the active tab. Stops the current screencast, re-points
+   * `this.page`, and starts a new screencast on the now-active tab.
+   * Idempotent: switching to the already-active index is a no-op.
+   */
+  async switchTab(index) {
+    if (!this.tabs[index]) throw new Error(`No tab at index ${index}`);
+    if (this.page === this.tabs[index]) return { index, activated: false };
+    await this.stopScreencast();
+    this.page = this.tabs[index];
+    await this.page.bringToFront();
+    await this.startScreencast();
+    this.log('tab-switch', `→ #${index} ${this.page.url()}`);
+    return { index, activated: true, url: this.page.url() };
+  }
+
+  /**
+   * Close a tab. If the active tab is closed, activates the previous
+   * one (or the next one if we closed index 0). Closing the last
+   * remaining tab is disallowed — use Session.close() to tear the
+   * whole session down.
+   */
+  async closeTab(index) {
+    if (!this.tabs[index]) throw new Error(`No tab at index ${index}`);
+    if (this.tabs.length === 1) {
+      throw new Error('Cannot close the last tab; call /api/close to end the session');
+    }
+    const closing = this.tabs[index];
+    const wasActive = this.page === closing;
+    this.tabs.splice(index, 1);
+    try { await closing.close(); } catch { /* already closed */ }
+    if (wasActive) {
+      const nextIdx = Math.min(index, this.tabs.length - 1);
+      await this.switchTab(nextIdx);
+    }
+    this.log('tab-close', `#${index}`);
+    return { closed: index, active: this.tabs.indexOf(this.page), remaining: this.tabs.length };
+  }
+
+  /** List all tabs with their url + title for UI rendering. */
+  async listTabs() {
+    const activeIndex = this.tabs.indexOf(this.page);
+    const out = [];
+    for (let i = 0; i < this.tabs.length; i++) {
+      const page = this.tabs[i];
+      out.push({
+        index: i,
+        active: i === activeIndex,
+        url: page.url(),
+        title: await page.title().catch(() => ''),
+      });
+    }
+    return out;
   }
 
   async startScreencast() {
@@ -301,6 +432,7 @@ export class Session {
       try { await this.browser.close(); } catch {}
       this.browser = null;
       this.page = null;
+      this.tabs = [];
       this.cdpSession = null;
     }
     this.subscribers.clear();
