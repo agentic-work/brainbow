@@ -403,6 +403,151 @@ app.get('/api/snapshot', async (req, res) => {
 });
 
 /**
+ * GET /api/observe?since=<ts>&screenshot=1&save=/path.png
+ *
+ * "Give me everything in one call" endpoint — optimized for agent
+ * loops that co-drive a browser with a human. Returns:
+ *   - ts:             now (epoch ms) — pass back as `since` next call
+ *   - url + title:    current nav state
+ *   - viewport:       {width,height}
+ *   - screenshotPath: if ?screenshot=1 we write a PNG to disk and
+ *                     return its filesystem path; caller Read()s it.
+ *                     Defaults off. If ?save= given, writes there;
+ *                     otherwise /tmp/brainbow-obs/<sessionId>-<ts>.png
+ *   - consoleDelta:   console messages with ts > since
+ *   - actionDelta:    action-log entries with ts > since
+ *   - visibleText:    first 400 chars of document.body.innerText
+ *                     (cheap way to tell "is the streaming done")
+ *   - viewerUrl:      `http://<host>:<port>/?session=<id>` so you
+ *                     can join the same live viewer I'm looking at
+ *
+ * Purpose: replace the multi-call pattern (screenshot + pageinfo +
+ * console + eval) with ONE call per observation tick. Polling is
+ * `curl /api/observe?since=$TS` → get the next tick in 1 roundtrip.
+ */
+app.get('/api/observe', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  try {
+    const since = Number.parseInt(req.query.since || '0') || 0;
+    const wantShot = req.query.screenshot === '1' || req.query.screenshot === 'true';
+    const ts = Date.now();
+    const [visibleText, title] = await Promise.all([
+      session.page.evaluate(() => document.body?.innerText?.slice(0, 400) || '').catch(() => ''),
+      session.page.title().catch(() => ''),
+    ]);
+    let screenshotPath = null;
+    if (wantShot) {
+      const dir = path.join(os.tmpdir(), 'brainbow-obs');
+      fs.mkdirSync(dir, { recursive: true });
+      screenshotPath = req.query.save || path.join(dir, `${session.sessionId}-${ts}.png`);
+      const buf = await session.page.screenshot({ type: 'png' });
+      fs.writeFileSync(screenshotPath, buf);
+    }
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const viewerUrl = `${protocol}://${host}/?session=${encodeURIComponent(session.sessionId)}`;
+
+    res.json({
+      ts,
+      url: session.page.url(),
+      title,
+      viewport: { ...session.viewport },
+      visibleText,
+      screenshotPath,
+      consoleDelta: (session.consoleMessages || []).filter(m => (m.ts || 0) > since),
+      actionDelta: (session.actionLog || []).filter(a => new Date(a.ts).getTime() > since),
+      viewerUrl,
+      sessionId: session.sessionId,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * GET /api/tail?after=<ts>&limit=<n>
+ *
+ * Event-stream tail — returns all session events (actions, console,
+ * dialogs) newer than `after` (epoch ms), in chronological order.
+ * Cheap polling for agents that want to react to events rather than
+ * request-response screenshot loops.
+ *
+ * Each entry: { kind: 'action'|'console', ts, ...fields }.
+ */
+app.get('/api/tail', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  try {
+    const after = Number.parseInt(req.query.after || '0') || 0;
+    const limit = Math.min(1000, Math.max(1, Number.parseInt(req.query.limit || '500')));
+    // Action timestamps are ISO strings; convert to epoch and spread
+    // first so the numeric ts isn't overwritten by the string.
+    const actions = (session.actionLog || [])
+      .map(a => ({ ...a, kind: 'action', ts: new Date(a.ts).getTime() }))
+      .filter(e => e.ts > after);
+    const console = (session.consoleMessages || [])
+      .map(m => ({ ...m, kind: 'console' }))
+      .filter(e => e.ts > after);
+    const merged = [...actions, ...console]
+      .sort((a, b) => a.ts - b.ts)
+      .slice(-limit);
+    res.json({
+      ts: Date.now(),
+      count: merged.length,
+      events: merged,
+      sessionId: session.sessionId,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * POST /api/wait-for — like /api/wait but also supports:
+ *   - urlPattern: regex the current page URL must match
+ *   - textGone:   text that must DISAPPEAR (inverse of `text`)
+ *   - networkIdle: wait N ms with no pending requests
+ * Returns { ok, matched, elapsedMs } or { ok:false, error, elapsedMs }.
+ */
+app.post('/api/wait-for', async (req, res) => {
+  const session = await getSession(req, res);
+  if (!session) return;
+  if (!requireBrowser(session, res)) return;
+  const started = Date.now();
+  try {
+    const { selector, text, textGone, urlPattern, networkIdle, timeout = 30000 } = req.body || {};
+    session.log('wait-for', JSON.stringify({ selector, text, textGone, urlPattern, networkIdle }).slice(0, 200));
+    if (urlPattern) {
+      const re = new RegExp(urlPattern);
+      await session.page.waitForFunction(
+        (pattern) => new RegExp(pattern).test(location.href),
+        { timeout },
+        urlPattern,
+      );
+    } else if (textGone) {
+      await session.page.waitForFunction(
+        (t) => !document.body.innerText.includes(t),
+        { timeout },
+        textGone,
+      );
+    } else if (text) {
+      await session.page.waitForFunction(
+        (t) => document.body.innerText.includes(t),
+        { timeout },
+        text,
+      );
+    } else if (selector) {
+      await session.page.waitForSelector(selector, { visible: true, timeout });
+    } else if (networkIdle) {
+      await session.page.waitForNetworkIdle({ idleTime: Number(networkIdle), timeout });
+    } else {
+      return res.status(400).json({ error: 'need one of: selector, text, textGone, urlPattern, networkIdle' });
+    }
+    res.json({ ok: true, matched: true, elapsedMs: Date.now() - started, sessionId: session.sessionId });
+  } catch (e) {
+    res.json({ ok: false, matched: false, error: e.message, elapsedMs: Date.now() - started, sessionId: session.sessionId });
+  }
+});
+
+/**
  * GET /api/console — ring buffer of the last N page-side console
  * messages captured since session launch. Supports ?level=error|warn
  * filters and ?limit=N head-limit for large dumps.
