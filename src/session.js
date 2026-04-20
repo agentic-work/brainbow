@@ -158,6 +158,10 @@ export class Session {
     const entry = { ts: new Date().toISOString(), action, detail: safeDetail, sessionId: this.sessionId };
     this.actionLog.push(entry);
     if (this.actionLog.length > this.maxActionLogSize) this.actionLog.shift();
+    // Broadcast as 'action' so the viewer's right-side log panel
+    // populates in real time. The ws handler in ui.html already routes
+    // {type:'action'} → addLog; the only missing piece was this push.
+    this.broadcast({ type: 'action', ...entry });
     return entry;
   }
 
@@ -181,9 +185,20 @@ export class Session {
     const height = opts.height || this.viewport.height;
     this.viewport = { width, height };
 
+    // Persistent profile — cookies, saved creds, session storage all
+    // survive across /api/launch cycles. Without this, every relaunch
+    // drops the user back on the login page (user feedback: "why isn't
+    // it saving creds like a normal browser would"). Profile dir is
+    // per-sessionId so multiple sessions don't stomp each other.
+    const profileDir = process.env.BRAINBOW_PROFILE_DIR
+      || path.join(os.homedir(), '.cache', 'brainbow', 'profiles', this.sessionId);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+    this.log('profile', profileDir);
+
     this.browser = await puppeteer.launch({
       executablePath: chromePath,
       headless: 'new',
+      userDataDir: profileDir,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -193,6 +208,8 @@ export class Session {
         '--disable-extensions',
         '--no-first-run',
         '--disable-default-apps',
+        // Let Chromium keep cookies + local storage across runs.
+        '--restore-last-session',
       ],
     });
 
