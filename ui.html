@@ -139,6 +139,7 @@
   </div>
 
   <div class="browser" id="bp">
+    <div id="tabBar" style="display:none; align-items:stretch; gap:4px; padding:4px 6px 0 6px; background:#0f0f0f; border-bottom:1px solid #222; overflow-x:auto; white-space:nowrap; font-size:11px;"></div>
     <img id="frame" style="display:none" />
     <div class="no-browser" id="noB">
       Enter URL or call the API
@@ -237,6 +238,69 @@ function redact(text) {
   }
   return result;
 }
+
+// ─── Tab bar ────────────────────────────────────────────────────────────
+// Renders one pill per open tab, click-to-switch, ✕ to close, + to open.
+async function refreshTabs() {
+  try {
+    const r = await fetch('/api/tabs');
+    if (!r.ok) return;
+    const { tabs } = await r.json();
+    const bar = document.getElementById('tabBar');
+    if (!bar) return;
+    // Hide bar entirely when there's only one tab — avoids clutter
+    // for the common single-session case.
+    if (!tabs || tabs.length < 2) {
+      bar.style.display = 'flex';
+      bar.innerHTML = '';
+      if (tabs && tabs.length === 1) {
+        const t = tabs[0];
+        const title = (t.title || t.url || 'untitled').slice(0, 40);
+        bar.innerHTML =
+          `<div style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px 6px 0 0;background:#1b1b1b;color:#ccc;border:1px solid #00ff0033;border-bottom:none;font-family:inherit;">` +
+          `<span style="font-size:10px;color:#888">tab 0</span><span>${escapeHtml(title)}</span></div>` +
+          `<button onclick="newTab()" title="Open a new tab (compare another app)" style="margin-left:auto;padding:0 10px;background:transparent;border:1px solid #333;color:#888;border-radius:4px;cursor:pointer;font-family:inherit;font-size:14px">＋ new tab</button>`;
+      }
+      return;
+    }
+    bar.style.display = 'flex';
+    bar.innerHTML = tabs.map(t => {
+      const title = (t.title || t.url || 'untitled').slice(0, 30);
+      const active = t.active
+        ? 'background:#1b1b1b;color:#00ff88;border:1px solid #00ff0066;border-bottom:1px solid #1b1b1b;'
+        : 'background:#0a0a0a;color:#888;border:1px solid #222;';
+      return `<div onclick="switchTab(${t.index})" style="${active}padding:4px 10px;border-radius:6px 6px 0 0;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:inherit;max-width:260px;overflow:hidden;white-space:nowrap">` +
+        `<span style="font-size:10px;color:#666">[${t.index}]</span>` +
+        `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(title)}</span>` +
+        `<span onclick="event.stopPropagation();closeTab(${t.index})" style="color:#666;cursor:pointer;padding:0 4px" title="Close tab">✕</span>` +
+        `</div>`;
+    }).join('') + `<button onclick="newTab()" title="Open a new tab (compare another app)" style="padding:0 10px;background:transparent;border:1px solid #333;color:#888;border-radius:4px;cursor:pointer;font-family:inherit;font-size:14px">＋</button>`;
+  } catch {}
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function newTab() {
+  const url = prompt('New tab URL:', 'https://');
+  if (!url) return;
+  await fetch('/api/tabs/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, activate: true }) });
+  await refreshTabs();
+}
+
+async function switchTab(index) {
+  await fetch('/api/tabs/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }) });
+  await refreshTabs();
+}
+
+async function closeTab(index) {
+  await fetch('/api/tabs/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }) });
+  await refreshTabs();
+}
+
+setInterval(refreshTabs, 2000);
+window.addEventListener('load', refreshTabs);
 
 // ─── WebSocket ──────────────────────────────────────────────────────────
 async function connectViewer() {
