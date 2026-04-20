@@ -44,7 +44,12 @@ export function findChrome() {
 
 const DEFAULT_FRAME_BUFFER = 300;     // ~10s @ 30fps
 const DEFAULT_ACTION_LOG = 200;
-const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
+// Bumped from 1440x900 → 1920x1200 so observe() screenshots fit more
+// chat/code content in a single frame. Agents (Claude) auto-downscale
+// the image in their Read tool anyway; higher source resolution gives
+// them sharper text in the downscaled view. Users can still override
+// per-launch via { width, height } in the launch payload.
+const DEFAULT_VIEWPORT = { width: 1920, height: 1200 };
 
 export class Session {
   constructor(sessionId, opts = {}) {
