@@ -71,9 +71,25 @@ function sessionIdOf(req) {
       || 'default';
 }
 
+/**
+ * whoami/viewer default: pick the most-recently-used session so opening
+ * the viewer at `/` lands on the live session without the user clicking
+ * through a picker. Regression from the tabs work where the default
+ * always resolved to 'default' — which stayed empty when all real
+ * activity happened on named sessions.
+ */
+function defaultViewerSessionId() {
+  return sessionManager.mostRecentId() || 'default';
+}
+
 async function getSession(req, res) {
   try {
-    return await sessionManager.get(sessionIdOf(req));
+    const sid = sessionIdOf(req);
+    const session = await sessionManager.get(sid);
+    // Bump activity so /api/whoami's default-session pick reflects
+    // real traffic, not just insertion order.
+    sessionManager.touch(sid);
+    return session;
   } catch (e) {
     res.status(404).json({ error: e.message, code: e.code });
     return null;
@@ -308,7 +324,12 @@ function runFFmpeg(args) {
 // ─── Session identity endpoints ──────────────────────────────────────────────
 
 app.get('/api/whoami', (req, res) => {
-  const sid = sessionIdOf(req);
+  // If the client passed ?sessionId explicitly, honor it. Otherwise pick
+  // the most-recently-used session so the default viewer auto-lands on
+  // the active one instead of an empty 'default' session.
+  const sid = req.query.sessionId
+    || req.headers['x-brainbow-session']
+    || defaultViewerSessionId();
   res.json({ sessionId: sid, mode: MODE });
 });
 

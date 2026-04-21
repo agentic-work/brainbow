@@ -49,6 +49,36 @@ export class SessionManager {
     return Array.from(this.sessions.keys());
   }
 
+  /**
+   * Return the session id most recently touched (by API call or frame emit).
+   * Sessions track `lastActivityAt` via touch(). Falls back to the most
+   * recently inserted session (Map iteration is insertion-order), and
+   * finally to undefined if empty. Used by /api/whoami so opening the
+   * viewer at `/` lands on the live session without picking.
+   */
+  mostRecentId() {
+    let bestId;
+    let bestTs = 0;
+    for (const [id, sess] of this.sessions) {
+      const ts = sess.lastActivityAt || 0;
+      if (ts >= bestTs) {
+        bestTs = ts;
+        bestId = id;
+      }
+    }
+    return bestId;
+  }
+
+  /**
+   * Bump the lastActivityAt timestamp on a session. Called from the
+   * server whenever a request is routed to a specific session so
+   * mostRecentId() reflects real-world use, not just creation order.
+   */
+  touch(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (s) s.lastActivityAt = Date.now();
+  }
+
   async closeAll() {
     const ids = this.list();
     for (const id of ids) {
