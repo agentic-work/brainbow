@@ -1,0 +1,23 @@
+# Gitleaks config — extend the default rule set, then allowlist docs
+# examples that show `curl -u "$VAR:"` patterns (variable references,
+# not real secrets).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Doc examples showing the curl -u pattern with shell variables"
+paths = [
+  "^CLAUDE\\.md$",
+  "^docs/",
+  "^README\\.md$",
+  "^\\.github/",
+]
+regexTarget = "match"
+regexes = [
+  # Shell variable expansions — not real creds
+  '''\$\{?[A-Z_][A-Z0-9_]*\}?:?''',
+  # Placeholder tokens the docs tell the reader to replace
+  '''<[A-Z_-]+>:?''',
+  '''YOUR_[A-Z_]+''',
+  '''sqa_\.\.\.''',
+]
