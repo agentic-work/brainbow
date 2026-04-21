@@ -34,11 +34,11 @@ jobs:
       - name: Scan PR diff
         if: github.event_name == 'pull_request'
         run: |
-          gitleaks detect \
+          gitleaks detect --config .gitleaks.toml \
             --source . \
             --redact \
             --exit-code 1 \
             --log-opts "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
       - name: Scan working tree (no-git)
         if: github.event_name != 'pull_request'
-        run: gitleaks detect --source . --no-git --redact --exit-code 1
+        run: gitleaks detect --config .gitleaks.toml --source . --no-git --redact --exit-code 1
