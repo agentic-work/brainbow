@@ -163,14 +163,18 @@ describe('Session', () => {
 
   it('screenshot fallback no-ops when page is missing', async () => {
     session.page = null;
-    session.broadcast = () => {
-      throw new Error('should not broadcast when page is null');
-    };
-    session.startScreenshotFallback();
-    await new Promise((r) => setTimeout(r, 180));
-    clearInterval(session._fallbackInterval);
-    session._fallbackInterval = null;
-    // If we got here without throwing, the null-page branch ran.
-    expect(true).toBe(true);
+    const calls = [];
+    const origBroadcast = session.broadcast.bind(session);
+    session.broadcast = (msg) => calls.push(msg);
+    try {
+      session.startScreenshotFallback();
+      await new Promise((r) => setTimeout(r, 180));
+      clearInterval(session._fallbackInterval);
+      session._fallbackInterval = null;
+      const frames = calls.filter((m) => m && m.type === 'frame');
+      expect(frames).toHaveLength(0);
+    } finally {
+      session.broadcast = origBroadcast;
+    }
   });
 });
