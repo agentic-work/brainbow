@@ -18,7 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        # v0.33.1 SHA; bare "0.28.0" 404s during action resolution
+        # (tag namespace uses the `v` prefix).
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8
         with:
           scan-type: fs
           severity: CRITICAL,HIGH
