@@ -106,18 +106,24 @@ echo "=== shim trace ==="
 cat /tmp/brainbow-shim-trace.log
 echo
 
-# Assertion: brainbow tools registered if response is NOT the literal sentinel
-# AND contains evidence of an actual tool invocation.
-if grep -q "BRAINBOW_NOT_REGISTERED" "$OUTPUT_FILE"; then
-  echo "=== RESULT: RED ==="
-  echo "Brainbow MCP tools did NOT register in spawned Claude's toolset."
-  echo "Check STDERR above for the actual MCP error."
-  exit 1
-elif grep -qiE "tool exists in my toolset|the tool .*brainbow.* is available|sessions|\"sessionId\"" "$OUTPUT_FILE"; then
+# Assertion: brainbow tools registered if response shows ANY evidence of the
+# tool existing in the toolset. Permission denial is expected in --print
+# mode (no human to approve), so we ONLY treat "literal NOT_REGISTERED with
+# no self-correction" as RED.
+#
+# Sub-Claudes often respond "BRAINBOW_NOT_REGISTERED" then immediately
+# self-correct ("Wait — the tool IS registered, just permission-denied").
+# We must detect the corrected statement, not the initial sentinel.
+if grep -qiE "tool .*exists|tool .*is registered|tool .*is available|schema loaded|permission.*den|haven't granted|requested permissions|sessionId" "$OUTPUT_FILE"; then
   echo "=== RESULT: GREEN ==="
   echo "Brainbow MCP tools registered into the spawned Claude's toolset."
   echo "(Permission denial in --print mode is expected; what matters is the tool IS present.)"
   exit 0
+elif grep -q "BRAINBOW_NOT_REGISTERED" "$OUTPUT_FILE"; then
+  echo "=== RESULT: RED ==="
+  echo "Brainbow MCP tools did NOT register in spawned Claude's toolset."
+  echo "Check STDERR above for the actual MCP error."
+  exit 1
 else
   echo "=== RESULT: AMBIGUOUS ==="
   echo "Neither sentinel found nor tool-result evidence. Inspect output."
