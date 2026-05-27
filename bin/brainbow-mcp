@@ -101,25 +101,52 @@ export BRAINBOW_VISION_MODEL="${BRAINBOW_VISION_MODEL:-us.anthropic.claude-haiku
 export BRAINBOW_VISION_AUTOSTART="${BRAINBOW_VISION_AUTOSTART:-false}"
 
 # ─── (a) Auto-start REST server if not up ──────────────────────────────
+# Per-Claude PORT (set above), so each Claude has its own REST process.
+# Per-Claude LOG file too — sharing /tmp/brainbow.log caused shim #N to
+# truncate shim #N-1's banner+error log, hiding crashes (2026-05-27).
 rest_up() { curl -fsS --max-time 1 "$BASE_URL/api/whoami" >/dev/null 2>&1; }
 
+# Default LOG_DIR honors $BRAINBOW_LOG_DIR if caller set it; per-port file
+# inside that dir keeps each Claude's server log isolated.
+LOG_DIR="${BRAINBOW_LOG_DIR:-/tmp/brainbow}"
+LOG="${BRAINBOW_LOG_FILE:-${LOG_DIR}/brainbow-${PORT}.log}"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
 if [ "$AUTOSTART_REST" = "true" ] && ! rest_up; then
-  echo "[brainbow-mcp] REST server not detected on $BASE_URL — starting it..." >&2
-  LOG="${BRAINBOW_LOG_FILE:-/tmp/brainbow.log}"
-  # setsid + nohup keeps it alive after this shim exits. Stdio detached.
-  setsid nohup "$NODE_BIN" "$REPO_ROOT/server.js" >"$LOG" 2>&1 </dev/null &
+  echo "[brainbow-mcp] REST not detected on $BASE_URL — spawning server.js (log: $LOG)..." >&2
+
+  # setsid + nohup keeps the REST alive after this shim exits. Stdio
+  # detached. APPEND (>>) not truncate (>) so concurrent shims don't
+  # clobber each other's history.
+  setsid nohup env BRAINBOW_PORT="$PORT" "$NODE_BIN" "$REPO_ROOT/server.js" >>"$LOG" 2>&1 </dev/null &
   SPAWNED_PID=$!
   disown 2>/dev/null || true
-  # Wait up to 8s for it to come up
-  for i in $(seq 1 16); do
+
+  # Wait up to 15s for the REST to come up. Longer than the old 8s
+  # because slow cold starts (npm imports + Chromium probe) can take 10s+.
+  rest_started=false
+  for i in $(seq 1 30); do
     if rest_up; then
-      echo "[brainbow-mcp] REST up (pid $SPAWNED_PID, log: $LOG)" >&2
+      rest_started=true
+      echo "[brainbow-mcp] REST up on $BASE_URL (pid $SPAWNED_PID, took $((i / 2))s, log: $LOG)" >&2
       break
     fi
     sleep 0.5
   done
-  if ! rest_up; then
-    echo "[brainbow-mcp] WARNING: REST didn't come up in 8s; check $LOG" >&2
+
+  # CRITICAL: if the REST didn't bind in 15s, abort the MCP handshake.
+  # The old code printed a warning then exec'd mcp-server.js anyway,
+  # which left the Claude MCP client hanging on HTTP calls to a dead
+  # port until its 30s handshake timeout. That UX is unacceptable —
+  # the user sees "MCP server brainbow connection timed out" with no
+  # signal of why. Fail loud, fail fast.
+  if [ "$rest_started" = "false" ]; then
+    echo "[brainbow-mcp] FATAL: REST didn't bind $BASE_URL in 15s." >&2
+    echo "[brainbow-mcp] Server log tail (last 30 lines):" >&2
+    tail -30 "$LOG" 2>/dev/null >&2 || echo "[brainbow-mcp] (log file unreadable: $LOG)" >&2
+    echo "[brainbow-mcp] Aborting MCP handshake. The Claude MCP client will see this" >&2
+    echo "[brainbow-mcp] as a connection error, NOT a silent timeout." >&2
+    exit 1
   fi
 fi
 
