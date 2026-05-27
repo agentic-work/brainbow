@@ -75,8 +75,8 @@ export function registerLiveRoutes(app, { sessionManager, getSession }) {
       ok: true,
       watching: true,
       interval_ms: sharedVisionNarrator.intervalMs,
-      model: sharedVisionNarrator.modelId,
-      region: sharedVisionNarrator.region,
+      provider: sharedVisionNarrator.providerName,
+      model: sharedVisionNarrator.model,
       sessionId: session.sessionId,
     });
   });
@@ -96,7 +96,8 @@ export function registerLiveRoutes(app, { sessionManager, getSession }) {
     res.json({
       sessionId: session.sessionId,
       watching: !!session.visionWatching,
-      model: sharedVisionNarrator.modelId,
+      provider: sharedVisionNarrator.providerName,
+      model: sharedVisionNarrator.model,
       lastError: session.visionError || null,
       cursor: Date.now(),
       entries,

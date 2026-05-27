@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { redactSecrets } from './redaction.js';
+import { appendStreamEvent } from './stream-log.js';
 
 // When BRAINBOW_FRAME_LOG is set, Session writes one NDJSON line per
 // unique screencast frame: { ts, sessionId, tabIndex, url, path }. The
@@ -134,21 +135,23 @@ export class Session {
     if (this.recording) {
       this.recordFrames.push({ data: base64Data, ts: Date.now() - this.recordStartTime });
     }
-    // Live-frame-log: sampled, opt-in. Writes one PNG per sampled
-    // frame and appends an NDJSON line for agents Monitoring.
+    // Live-frame-log: sampled, opt-in. Writes one JPEG per sampled
+    // frame and appends an NDJSON event (type: 'frame') via
+    // appendStreamEvent so frames + narration + log-tail lines share
+    // one Monitor-able stream.
     if (FRAME_LOG_PATH && ts - this._lastFrameLogTs >= FRAME_LOG_SAMPLE_MS) {
       this._lastFrameLogTs = ts;
       try {
         const framePath = path.join(FRAME_LOG_DIR, `${this.sessionId}-${ts}.jpg`);
         fs.writeFileSync(framePath, Buffer.from(base64Data, 'base64'));
-        const line = JSON.stringify({
+        appendStreamEvent({
+          type: 'frame',
           ts,
           sessionId: this.sessionId,
           tabIndex: this.tabs?.indexOf(this.page) ?? 0,
           url: this.page?.url?.() || '',
           path: framePath,
-        }) + '\n';
-        fs.appendFileSync(FRAME_LOG_PATH, line);
+        });
       } catch { /* disk full / perm issue → silently skip */ }
     }
   }

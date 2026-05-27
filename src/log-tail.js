@@ -14,6 +14,7 @@
 // for local-dev "AI watches the api logs while I drive the UI" workflows.
 
 import { spawn } from 'node:child_process';
+import { appendStreamEvent } from './stream-log.js';
 
 const DEFAULT_RING_SIZE = 1000;
 
@@ -93,10 +94,12 @@ export class LogTail {
   }
 
   _push(stream, line) {
-    this.lines.push({ ts: Date.now(), stream, line });
+    const entry = { ts: Date.now(), stream, line };
+    this.lines.push(entry);
     if (this.lines.length > this.ringSize) {
       this.lines.splice(0, this.lines.length - this.ringSize);
     }
+    appendStreamEvent({ type: 'log', name: this.name, ...entry });
   }
 
   /** Return all lines newer than `sinceTs` (ms). 0 = all. */
