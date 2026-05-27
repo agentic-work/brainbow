@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# brainbow-mcp — launcher for the brainbow MCP stdio server.
+#
+# Spawned by Claude Code (or any MCP client). Sets PATH to include the
+# Linux node binary, then execs the MCP server. Stdin/stdout is the MCP
+# transport; stderr is diagnostics.
+#
+# Env vars consumed (all optional):
+#   BRAINBOW_URL                      brainbow REST base (default http://localhost:4444)
+#   BRAINBOW_PORT                     used to derive BRAINBOW_URL if BRAINBOW_URL unset
+#   BRAINBOW_TOKEN / GHOST_SECRET     bearer token for brainbow auth (if server requires)
+#   BRAINBOW_VISION_AUTOSTART=true    auto-start Bedrock vision narrator on first screen/live
+#   BRAINBOW_VISION_MODEL             inference profile id (default us.anthropic.claude-sonnet-4-6-...)
+#   AWS_REGION                        Bedrock region (default us-east-1)
+#   BRAINBOW_SESSION                  default sessionId (default "default")
+#
+# Prereq: brainbow REST server must be running independently
+# (`cd ~/agenticwork/brainbow && npm start`). This launcher only spawns
+# the MCP wrapper; it does NOT start the REST server.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+
+# Prefer the user's nvm node 22; fall back to whatever's on PATH.
+for candidate in \
+    "/home/trent/.nvm/versions/node/v22.22.3/bin/node" \
+    "/home/trent/.nvm/versions/node/v24.13.1/bin/node" \
+    "$(command -v node 2>/dev/null || true)"; do
+  if [ -x "$candidate" ]; then
+    NODE_BIN="$candidate"
+    break
+  fi
+done
+
+if [ -z "${NODE_BIN:-}" ]; then
+  echo "[brainbow-mcp] ERROR: no node binary found on PATH or nvm" >&2
+  exit 1
+fi
+
+exec "$NODE_BIN" "$REPO_ROOT/src/mcp-server.js"

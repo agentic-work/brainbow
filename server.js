@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './src/redaction.js';
 import { Session } from './src/session.js';
 import { SessionManager } from './src/session-manager.js';
+import { registerLiveRoutes } from './src/live-routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number.parseInt(process.env.BRAINBOW_PORT || process.env.GHOST_PORT || '4444');
@@ -1505,6 +1506,9 @@ server.on('upgrade', (request, socket, head) => {
     });
   });
 });
+
+// ─── Live observation routes (Bedrock Sonnet narrator + log tails + /api/live)
+registerLiveRoutes(app, { sessionManager, getSession });
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 server.listen(PORT, () => {
