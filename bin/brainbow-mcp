@@ -31,22 +31,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
-PORT="${BRAINBOW_PORT:-4444}"
-BASE_URL="${BRAINBOW_URL:-http://localhost:$PORT}"
-AUTOSTART_REST="${BRAINBOW_AUTOSTART_REST:-true}"
-AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-true}"
-VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened-once}"
 
-# ─── Vision narrator: cloud by default, NEVER local GPU ────────────────
-# Force every brainbow invocation onto cheap+fast Bedrock Haiku 4.5. Local
-# Ollama vision (qwen2.5vl) would burn the host GPU's VRAM, which is
-# unacceptable on workstations sharing the GPU with other tools.
-export BRAINBOW_VISION_PROVIDER="${BRAINBOW_VISION_PROVIDER:-bedrock}"
-export BRAINBOW_VISION_MODEL="${BRAINBOW_VISION_MODEL:-us.anthropic.claude-haiku-4-5}"
-# Don't auto-start narration on first /api/live — it must be explicit.
-export BRAINBOW_VISION_AUTOSTART="${BRAINBOW_VISION_AUTOSTART:-false}"
-
-# ─── Locate a usable Node ──────────────────────────────────────────────
+# ─── Locate a usable Node (needed for the free-port probe below) ───────
 for candidate in \
     "/home/trent/.nvm/versions/node/v22.22.3/bin/node" \
     "/home/trent/.nvm/versions/node/v24.13.1/bin/node" \
@@ -57,6 +43,62 @@ if [ -z "${NODE_BIN:-}" ]; then
   echo "[brainbow-mcp] ERROR: no node binary found" >&2
   exit 1
 fi
+
+# ─── Per-Claude port isolation (2026-05-27) ────────────────────────────
+# Default behavior is ONE REST server per MCP host (per Claude). Each
+# Claude session gets its own port + own brainbow REST process + own
+# viewer URL — no cross-Claude sessionId collisions on a shared :4444.
+#
+# Client key: $PPID (the MCP host that spawned this shim). Stable for the
+# entire lifetime of the Claude session. Two Claudes have two PPIDs.
+#
+# Cached at ~/.cache/brainbow/port-<PPID> so re-invocations within the
+# same Claude reuse the same port (and the same setsid'd REST server).
+#
+# Explicit BRAINBOW_PORT still wins (back-compat, dev override, fixed
+# port for a long-lived viewer). To force the legacy shared :4444:
+#   BRAINBOW_PORT=4444 claude
+#
+# To skip the port cache (fresh port every shim invocation):
+#   BRAINBOW_PORT_REUSE=false claude
+PORT="${BRAINBOW_PORT:-}"
+if [ -z "$PORT" ]; then
+  CLIENT_KEY="${PPID:-$$}"
+  PORT_CACHE_DIR="${BRAINBOW_PORT_CACHE_DIR:-$HOME/.cache/brainbow}"
+  PORT_FILE="$PORT_CACHE_DIR/port-$CLIENT_KEY"
+  PORT_REUSE="${BRAINBOW_PORT_REUSE:-true}"
+
+  if [ "$PORT_REUSE" = "true" ] && [ -f "$PORT_FILE" ]; then
+    CACHED="$(cat "$PORT_FILE" 2>/dev/null || true)"
+    if [ -n "$CACHED" ]; then PORT="$CACHED"; fi
+  fi
+
+  if [ -z "$PORT" ]; then
+    PORT="$("$NODE_BIN" -e "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close();});")"
+    if [ -z "$PORT" ]; then
+      echo "[brainbow-mcp] WARN: free-port probe failed; falling back to 4444" >&2
+      PORT=4444
+    fi
+    mkdir -p "$PORT_CACHE_DIR" 2>/dev/null || true
+    echo "$PORT" > "$PORT_FILE" 2>/dev/null || true
+  fi
+  echo "[brainbow-mcp] per-Claude port $PORT (key: $CLIENT_KEY, cache: $PORT_FILE)" >&2
+fi
+export BRAINBOW_PORT="$PORT"
+BASE_URL="${BRAINBOW_URL:-http://localhost:$PORT}"
+AUTOSTART_REST="${BRAINBOW_AUTOSTART_REST:-true}"
+AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-true}"
+# Viewer marker scoped to PORT so each Claude opens its own viewer once.
+VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened-once-$PORT}"
+
+# ─── Vision narrator: cloud by default, NEVER local GPU ────────────────
+# Force every brainbow invocation onto cheap+fast Bedrock Haiku 4.5. Local
+# Ollama vision (qwen2.5vl) would burn the host GPU's VRAM, which is
+# unacceptable on workstations sharing the GPU with other tools.
+export BRAINBOW_VISION_PROVIDER="${BRAINBOW_VISION_PROVIDER:-bedrock}"
+export BRAINBOW_VISION_MODEL="${BRAINBOW_VISION_MODEL:-us.anthropic.claude-haiku-4-5}"
+# Don't auto-start narration on first /api/live — it must be explicit.
+export BRAINBOW_VISION_AUTOSTART="${BRAINBOW_VISION_AUTOSTART:-false}"
 
 # ─── (a) Auto-start REST server if not up ──────────────────────────────
 rest_up() { curl -fsS --max-time 1 "$BASE_URL/api/whoami" >/dev/null 2>&1; }
