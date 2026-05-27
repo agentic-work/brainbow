@@ -324,11 +324,13 @@ function scheduleReconnect(reason) {
   setTimeout(() => { _wsReconnectScheduled = false; connectViewer(); }, 1200);
 }
 async function connectViewer() {
-  let sessionId = 'default';
-  try {
-    const whoamiResp = await fetch('/api/whoami', { cache: 'no-store' });
-    sessionId = (await whoamiResp.json()).sessionId || 'default';
-  } catch { /* whoami down → still try default session */ }
+  let sessionId = new URLSearchParams(location.search).get('sessionId') || 'default';
+  if (sessionId === 'default') {
+    try {
+      const whoamiResp = await fetch('/api/whoami', { cache: 'no-store' });
+      sessionId = (await whoamiResp.json()).sessionId || 'default';
+    } catch { /* whoami down → still try default session */ }
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   try {
     ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(sessionId)}`);

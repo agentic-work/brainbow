@@ -400,6 +400,29 @@ async function callTool(name, args = {}) {
       if (args.width) body.width = args.width;
       if (args.height) body.height = args.height;
       const data = await brainbow('POST', `/api/launch${qs}`, body);
+      // Auto-pop viewer window for this session — matches Playwright MCP UX
+      // (it pops a Chromium when invoked). Honors BRAINBOW_AUTOOPEN_VIEWER=false
+      // to disable.
+      if (process.env.BRAINBOW_AUTOOPEN_VIEWER !== 'false') {
+        const baseUrl = process.env.BRAINBOW_URL || `http://localhost:${process.env.BRAINBOW_PORT || 4444}`;
+        const sessionId = args.sessionId || 'default';
+        const viewerUrl = `${baseUrl}/?sessionId=${encodeURIComponent(sessionId)}`;
+        const { spawn } = await import('node:child_process');
+        const tryOpen = (cmd, cmdArgs) => {
+          try {
+            const c = spawn(cmd, cmdArgs, { detached: true, stdio: 'ignore' });
+            c.unref();
+            return true;
+          } catch { return false; }
+        };
+        // Try in order: wslview, cmd.exe (WSL), xdg-open, open
+        const opened =
+          tryOpen('wslview', [viewerUrl]) ||
+          tryOpen('cmd.exe', ['/c', 'start', '', viewerUrl]) ||
+          (process.env.DISPLAY && tryOpen('xdg-open', [viewerUrl])) ||
+          tryOpen('open', [viewerUrl]);
+        if (opened) console.error(`[brainbow-mcp] popped viewer at ${viewerUrl}`);
+      }
       return [textBlock(data)];
     }
 
