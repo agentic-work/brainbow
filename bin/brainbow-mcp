@@ -1,42 +1,106 @@
 #!/usr/bin/env bash
-# brainbow-mcp — launcher for the brainbow MCP stdio server.
+# brainbow-mcp — stdio MCP launcher with auto-bootstrap.
 #
-# Spawned by Claude Code (or any MCP client). Sets PATH to include the
-# Linux node binary, then execs the MCP server. Stdin/stdout is the MCP
-# transport; stderr is diagnostics.
+# Spawned by Claude Code (or any MCP client) on stdin/stdout. Before
+# handing off to the MCP stdio handler, this shim:
+#   (a) starts brainbow REST server if it's not already listening on
+#       $BRAINBOW_PORT (default 4444). The REST server is spawned with
+#       setsid so it survives this shim and continues serving the viewer
+#       for the user.
+#   (b) opens the live viewer URL in the user's default browser so the
+#       human partner can SEE what the AI is doing — same UX as
+#       playwright MCP's `browser_navigate` popping a Chromium window.
+#       Tries (in order): wslview, cmd.exe /c start (WSL), xdg-open
+#       (Linux), open (macOS). Silently skips if none are available.
+#   (c) exec's into the MCP node script. From here on it's pure stdio.
 #
 # Env vars consumed (all optional):
-#   BRAINBOW_URL                      brainbow REST base (default http://localhost:4444)
-#   BRAINBOW_PORT                     used to derive BRAINBOW_URL if BRAINBOW_URL unset
-#   BRAINBOW_TOKEN / GHOST_SECRET     bearer token for brainbow auth (if server requires)
-#   BRAINBOW_VISION_AUTOSTART=true    auto-start Bedrock vision narrator on first screen/live
-#   BRAINBOW_VISION_MODEL             inference profile id (default us.anthropic.claude-sonnet-4-6-...)
-#   AWS_REGION                        Bedrock region (default us-east-1)
-#   BRAINBOW_SESSION                  default sessionId (default "default")
-#
-# Prereq: brainbow REST server must be running independently
-# (`cd ~/agenticwork/brainbow && npm start`). This launcher only spawns
-# the MCP wrapper; it does NOT start the REST server.
+#   BRAINBOW_URL                  REST base (default http://localhost:$BRAINBOW_PORT)
+#   BRAINBOW_PORT                 port (default 4444)
+#   BRAINBOW_AUTOSTART_REST       'false' to skip (a)            — default 'true'
+#   BRAINBOW_AUTOOPEN_VIEWER      'false' to skip (b)            — default 'true'
+#   BRAINBOW_VIEWER_OPENED_FLAG   marker file (don't reopen if exists)
+#                                 default $HOME/.cache/brainbow/.viewer-opened-once
+#   BRAINBOW_VISION_AUTOSTART     vision narrator on first /api/live
+#   BRAINBOW_LOG_TAILS_ENABLED    enable POST /api/log/subscribe
+#   AWS_REGION                    for Bedrock vision provider
+#   BRAINBOW_VISION_PROVIDER      ollama|bedrock|openai|anthropic
+#   BRAINBOW_VISION_MODEL         model id for the provider
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+PORT="${BRAINBOW_PORT:-4444}"
+BASE_URL="${BRAINBOW_URL:-http://localhost:$PORT}"
+AUTOSTART_REST="${BRAINBOW_AUTOSTART_REST:-true}"
+AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-true}"
+VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened-once}"
 
-# Prefer the user's nvm node 22; fall back to whatever's on PATH.
+# ─── Locate a usable Node ──────────────────────────────────────────────
 for candidate in \
     "/home/trent/.nvm/versions/node/v22.22.3/bin/node" \
     "/home/trent/.nvm/versions/node/v24.13.1/bin/node" \
     "$(command -v node 2>/dev/null || true)"; do
-  if [ -x "$candidate" ]; then
-    NODE_BIN="$candidate"
-    break
-  fi
+  if [ -x "$candidate" ]; then NODE_BIN="$candidate"; break; fi
 done
-
 if [ -z "${NODE_BIN:-}" ]; then
-  echo "[brainbow-mcp] ERROR: no node binary found on PATH or nvm" >&2
+  echo "[brainbow-mcp] ERROR: no node binary found" >&2
   exit 1
 fi
 
+# ─── (a) Auto-start REST server if not up ──────────────────────────────
+rest_up() { curl -fsS --max-time 1 "$BASE_URL/api/whoami" >/dev/null 2>&1; }
+
+if [ "$AUTOSTART_REST" = "true" ] && ! rest_up; then
+  echo "[brainbow-mcp] REST server not detected on $BASE_URL — starting it..." >&2
+  LOG="${BRAINBOW_LOG_FILE:-/tmp/brainbow.log}"
+  # setsid + nohup keeps it alive after this shim exits. Stdio detached.
+  setsid nohup "$NODE_BIN" "$REPO_ROOT/server.js" >"$LOG" 2>&1 </dev/null &
+  SPAWNED_PID=$!
+  disown 2>/dev/null || true
+  # Wait up to 8s for it to come up
+  for i in $(seq 1 16); do
+    if rest_up; then
+      echo "[brainbow-mcp] REST up (pid $SPAWNED_PID, log: $LOG)" >&2
+      break
+    fi
+    sleep 0.5
+  done
+  if ! rest_up; then
+    echo "[brainbow-mcp] WARNING: REST didn't come up in 8s; check $LOG" >&2
+  fi
+fi
+
+# ─── (b) Auto-open viewer in user's browser ────────────────────────────
+# Skipped if the marker file exists (already opened once for this user)
+# OR if no opener is available (headless host).
+open_viewer() {
+  local url="$1"
+  if command -v wslview >/dev/null 2>&1; then
+    wslview "$url" >/dev/null 2>&1 && return 0
+  fi
+  if command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c start "" "$url" >/dev/null 2>&1 && return 0
+  fi
+  if command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+    xdg-open "$url" >/dev/null 2>&1 && return 0
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+if [ "$AUTOOPEN_VIEWER" = "true" ] && [ ! -f "$VIEWER_FLAG" ]; then
+  mkdir -p "$(dirname "$VIEWER_FLAG")" 2>/dev/null || true
+  if open_viewer "$BASE_URL/"; then
+    touch "$VIEWER_FLAG" 2>/dev/null || true
+    echo "[brainbow-mcp] viewer opened at $BASE_URL/ (flag: $VIEWER_FLAG)" >&2
+  else
+    echo "[brainbow-mcp] no viewer opener available — open $BASE_URL/ manually" >&2
+  fi
+fi
+
+# ─── (c) Hand off to the MCP stdio server ──────────────────────────────
 exec "$NODE_BIN" "$REPO_ROOT/src/mcp-server.js"
