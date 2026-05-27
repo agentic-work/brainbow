@@ -29,6 +29,13 @@
 
 set -euo pipefail
 
+# ─── Invocation trace (so we can prove whether Claude even called us) ──
+# Single shared trace file across all shim invocations; each line tagged
+# with timestamp + PID + PPID so we can correlate to specific /mcp calls.
+TRACE_FILE="${BRAINBOW_TRACE_FILE:-/tmp/brainbow-shim-trace.log}"
+echo "[$(date '+%H:%M:%S.%3N')] [pid=$$ ppid=${PPID:-?}] BEGIN argv=$# tty=$(tty 2>/dev/null || echo notty)" >> "$TRACE_FILE" 2>/dev/null || true
+trap 'echo "[$(date '"'"'+%H:%M:%S.%3N'"'"')] [pid=$$] EXIT rc=$?" >> "$TRACE_FILE" 2>/dev/null || true' EXIT
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 
@@ -172,16 +179,21 @@ open_viewer() {
 
 if [ "$AUTOOPEN_VIEWER" = "true" ] && [ ! -f "$VIEWER_FLAG" ]; then
   mkdir -p "$(dirname "$VIEWER_FLAG")" 2>/dev/null || true
-  # Wrap open_viewer in `timeout 3` — wslview / cmd.exe can stall when
-  # the shim runs under an MCP-host stdio context (no TTY, no DISPLAY),
-  # which used to chew through Claude's 30s MCP handshake budget. The
-  # viewer is best-effort; the MCP handshake must come up regardless.
-  if timeout 3 bash -c "$(declare -f open_viewer); open_viewer \"$BASE_URL/\""; then
-    touch "$VIEWER_FLAG" 2>/dev/null || true
-    echo "[brainbow-mcp] viewer opened at $BASE_URL/ (flag: $VIEWER_FLAG)" >&2
-  else
-    echo "[brainbow-mcp] viewer auto-open skipped (no opener or stalled >3s) — open $BASE_URL/ manually" >&2
-  fi
+  # CRITICAL: fire-and-forget in the background. If we wait for the
+  # opener (wslview / cmd.exe / xdg-open / open), ANY delay here eats
+  # Claude's MCP-init race window. Other MCPs (context7, figma, …)
+  # hand back their tool catalog in <1s; brainbow has to do the same.
+  # The viewer is best-effort UX, not a registration prerequisite.
+  (
+    if timeout 5 bash -c "$(declare -f open_viewer); open_viewer \"$BASE_URL/\""; then
+      touch "$VIEWER_FLAG" 2>/dev/null || true
+      echo "[brainbow-mcp] viewer opened at $BASE_URL/ (background, flag: $VIEWER_FLAG)" >> "$TRACE_FILE" 2>/dev/null || true
+    else
+      echo "[brainbow-mcp] viewer auto-open failed/stalled (background)" >> "$TRACE_FILE" 2>/dev/null || true
+    fi
+  ) &
+  disown 2>/dev/null || true
+  echo "[brainbow-mcp] viewer auto-open dispatched (background, $BASE_URL/)" >&2
 fi
 
 # ─── (c) Hand off to the MCP stdio server ──────────────────────────────
