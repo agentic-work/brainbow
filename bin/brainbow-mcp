@@ -37,6 +37,15 @@ AUTOSTART_REST="${BRAINBOW_AUTOSTART_REST:-true}"
 AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-true}"
 VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened-once}"
 
+# ─── Vision narrator: cloud by default, NEVER local GPU ────────────────
+# Force every brainbow invocation onto cheap+fast Bedrock Haiku 4.5. Local
+# Ollama vision (qwen2.5vl) would burn the host GPU's VRAM, which is
+# unacceptable on workstations sharing the GPU with other tools.
+export BRAINBOW_VISION_PROVIDER="${BRAINBOW_VISION_PROVIDER:-bedrock}"
+export BRAINBOW_VISION_MODEL="${BRAINBOW_VISION_MODEL:-us.anthropic.claude-haiku-4-5}"
+# Don't auto-start narration on first /api/live — it must be explicit.
+export BRAINBOW_VISION_AUTOSTART="${BRAINBOW_VISION_AUTOSTART:-false}"
+
 # ─── Locate a usable Node ──────────────────────────────────────────────
 for candidate in \
     "/home/trent/.nvm/versions/node/v22.22.3/bin/node" \

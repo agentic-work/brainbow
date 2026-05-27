@@ -4,12 +4,15 @@
 // from ~/.aws/credentials.
 //
 // Env:
-//   BRAINBOW_VISION_MODEL  default us.anthropic.claude-sonnet-4-6 (inference profile)
+//   BRAINBOW_VISION_MODEL  default us.anthropic.claude-haiku-4-5 (cheap + fast,
+//                          appropriate for short narration output ≤220 tokens).
+//                          Override with us.anthropic.claude-sonnet-4-6 only when
+//                          higher fidelity matters.
 //   AWS_REGION             default us-east-1
 
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 
-const DEFAULT_MODEL = process.env.BRAINBOW_VISION_MODEL || 'us.anthropic.claude-sonnet-4-6';
+const DEFAULT_MODEL = process.env.BRAINBOW_VISION_MODEL || 'us.anthropic.claude-haiku-4-5';
 const DEFAULT_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
 
 export function createBedrockProvider({
