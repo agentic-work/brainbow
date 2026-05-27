@@ -405,7 +405,9 @@ async function callTool(name, args = {}) {
       // to disable.
       if (process.env.BRAINBOW_AUTOOPEN_VIEWER !== 'false') {
         const baseUrl = process.env.BRAINBOW_URL || `http://localhost:${process.env.BRAINBOW_PORT || 4444}`;
-        const sessionId = args.sessionId || 'default';
+        // Fall through to per-Claude default sessionId (BRAINBOW_SESSION env)
+        // set by bin/brainbow-mcp so each Claude pops its OWN viewer tab.
+        const sessionId = args.sessionId || DEFAULT_SESSION_ID;
         const viewerUrl = `${baseUrl}/?sessionId=${encodeURIComponent(sessionId)}`;
         const { spawn } = await import('node:child_process');
         const tryOpen = (cmd, cmdArgs) => {
