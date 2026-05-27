@@ -44,8 +44,8 @@ export class Brainbow extends EventEmitter {
    * @param {Object} opts
    * @param {string} [opts.url]             — initial URL to load
    * @param {string} [opts.sessionId]       — override the auto-generated id
-   * @param {number} [opts.width=1280]      — viewport width
-   * @param {number} [opts.height=800]      — viewport height
+   * @param {number} [opts.width=1920]      — viewport width (HD recording quality)
+   * @param {number} [opts.height=1200]     — viewport height
    * @param {Object|false} [opts.vision]    — vision narrator config OR false to disable
    * @param {string} [opts.vision.provider] — 'ollama'|'bedrock'|'openai'|'anthropic'
    * @param {string} [opts.vision.model]    — model id

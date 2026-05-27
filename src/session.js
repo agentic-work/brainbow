@@ -447,7 +447,7 @@ export class Session {
       });
       await this.cdpSession.send('Page.startScreencast', {
         format: 'jpeg',
-        quality: 80,
+        quality: 92,
         maxWidth: this.viewport.width,
         maxHeight: this.viewport.height,
         everyNthFrame: 1,
@@ -465,7 +465,7 @@ export class Session {
     this._fallbackInterval = setInterval(async () => {
       if (!this.page) return;
       try {
-        const buf = await this.page.screenshot({ type: 'jpeg', quality: 75 });
+        const buf = await this.page.screenshot({ type: 'jpeg', quality: 90 });
         const b64 = buf.toString('base64');
         this.pushFrame(b64);
         this.broadcast({ type: 'frame', data: b64 });
