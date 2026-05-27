@@ -24,7 +24,7 @@
 
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 
-const DEFAULT_MODEL_ID = 'us.anthropic.claude-sonnet-4-6-20250929-v1:0';
+const DEFAULT_MODEL_ID = 'us.anthropic.claude-sonnet-4-6';
 const DEFAULT_REGION = 'us-east-1';
 const DEFAULT_INTERVAL_MS = 2500;
 const DEFAULT_MAX_TOKENS = 220;
