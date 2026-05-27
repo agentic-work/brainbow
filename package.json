@@ -1,7 +1,19 @@
 {
-  "version": "0.7.0",
-  "description": "Shared browser control + cinematic recording studio — agent and human copilot a real Chromium together. Built for local dev, packaged as MCP / OpenClaw skill / Claude Code skill / native agenticode tool.",
+  "name": "@agenticwork/brainbow",
+  "version": "0.7.1",
+  "description": "Brainbow — programmable shared browser + live-vision narrator. Apps embed via `Brainbow.launch()` (Playwright-style) or run the REST/MCP server.",
   "type": "module",
+  "main": "./src/lib.js",
+  "exports": {
+    ".": "./src/lib.js",
+    "./server": "./server.js",
+    "./mcp": "./src/mcp-server.js",
+    "./session": "./src/session.js"
+  },
+  "bin": {
+    "brainbow": "./server.js",
+    "brainbow-mcp": "./bin/brainbow-mcp"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/agentic-work/brainbow.git"

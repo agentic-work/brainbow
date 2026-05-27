@@ -302,15 +302,48 @@ async function closeTab(index) {
 setInterval(refreshTabs, 2000);
 window.addEventListener('load', refreshTabs);
 
-// ─── WebSocket ──────────────────────────────────────────────────────────
+// ─── WebSocket — self-healing ──────────────────────────────────────────
+// Hard requirement: viewer MUST recover from any server restart / network
+// blip without a manual refresh. Three defenses:
+//   (1) `onerror` AND `onclose` both schedule reconnect — onerror fires when
+//       `new WebSocket()` cannot establish (server down); onclose fires when
+//       an established conn drops. Either one re-arms the loop.
+//   (2) `new WebSocket()` ctor wrapped in try/catch — some browsers throw
+//       synchronously on bad URL / mixed-content / refused.
+//   (3) Heartbeat watchdog — if no frame in HEARTBEAT_TIMEOUT ms, force-
+//       close the WS to trigger reconnect. Catches the case where the
+//       server died but the socket didn't notice yet (TCP half-open).
+let _wsReconnectScheduled = false;
+let _lastFrameAt = 0;
+const HEARTBEAT_TIMEOUT_MS = 4500;
+function scheduleReconnect(reason) {
+  if (_wsReconnectScheduled) return;
+  _wsReconnectScheduled = true;
+  document.getElementById('dot').classList.remove('on');
+  document.getElementById('stat').textContent = `offline — ${reason} — reconnecting...`;
+  setTimeout(() => { _wsReconnectScheduled = false; connectViewer(); }, 1200);
+}
 async function connectViewer() {
-  const whoamiResp = await fetch('/api/whoami');
-  const { sessionId } = await whoamiResp.json();
+  let sessionId = 'default';
+  try {
+    const whoamiResp = await fetch('/api/whoami', { cache: 'no-store' });
+    sessionId = (await whoamiResp.json()).sessionId || 'default';
+  } catch { /* whoami down → still try default session */ }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(sessionId)}`);
-  ws.onopen = () => { document.getElementById('dot').classList.add('on'); document.getElementById('stat').textContent = 'live'; };
-  ws.onclose = () => { document.getElementById('dot').classList.remove('on'); document.getElementById('stat').textContent = 'offline'; setTimeout(connectViewer, 1500); };
+  try {
+    ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(sessionId)}`);
+  } catch (e) {
+    return scheduleReconnect('ws-ctor-throw');
+  }
+  ws.onopen = () => {
+    _lastFrameAt = Date.now();
+    document.getElementById('dot').classList.add('on');
+    document.getElementById('stat').textContent = `live · session=${sessionId}`;
+  };
+  ws.onclose = () => scheduleReconnect('close');
+  ws.onerror = () => { try { ws.close(); } catch {} scheduleReconnect('error'); };
   ws.onmessage = (e) => {
+    _lastFrameAt = Date.now();
     const m = JSON.parse(e.data);
     if (m.type === 'frame') {
       frame.src = 'data:image/jpeg;base64,' + m.data;
@@ -332,6 +365,14 @@ async function connectViewer() {
     }
   };
 }
+// Watchdog: every 1.5s, if WS open but no frame in HEARTBEAT_TIMEOUT, force reconnect.
+setInterval(() => {
+  if (!ws || ws.readyState !== 1) return;
+  if (_lastFrameAt && Date.now() - _lastFrameAt > HEARTBEAT_TIMEOUT_MS) {
+    try { ws.close(); } catch {}
+    scheduleReconnect('heartbeat-timeout');
+  }
+}, 1500);
 
 function addLog(e) {
   const d = document.createElement('div');

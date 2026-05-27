@@ -116,6 +116,16 @@ export class Session {
     this.consoleMessages = [];
     this.maxConsoleSize = 200;
 
+    // Page-text watcher — polls document.body.innerText every
+    // BRAINBOW_PAGE_TEXT_INTERVAL_MS (default 2000ms). If the text
+    // delta from last poll is non-trivial (>40 chars added/removed),
+    // emit a `page_text` NDJSON event with the new tail + headings +
+    // links so the AI sees what the vision narrator might miss
+    // (small text, below-fold content, links/buttons by label).
+    this.pageTextInterval = null;
+    this.lastPageText = '';
+    this.pageTextWatching = false;
+
     // Subscribers (WebSocket viewers tied to this session)
     this.subscribers = new Set();
 
@@ -227,7 +237,71 @@ export class Session {
     }
 
     await this.startScreencast();
+    this.startPageTextWatcher();
     return { ok: true, url: this.page.url() };
+  }
+
+  /**
+   * Poll document.body.innerText every interval; if the text changed by
+   * more than `minDelta` characters, write a `page_text` event into the
+   * unified NDJSON stream so the AI sees DOM-grade text (headings,
+   * links, button labels) it might miss from the vision narration.
+   */
+  startPageTextWatcher() {
+    if (this.pageTextInterval) return;
+    const intervalMs = Number.parseInt(process.env.BRAINBOW_PAGE_TEXT_INTERVAL_MS || '2000');
+    const minDelta = Number.parseInt(process.env.BRAINBOW_PAGE_TEXT_MIN_DELTA || '40');
+    const maxBody = Number.parseInt(process.env.BRAINBOW_PAGE_TEXT_MAX_BODY || '3000');
+    this.pageTextWatching = true;
+    const tick = async () => {
+      if (!this.pageTextWatching || !this.page) return;
+      try {
+        const probe = await this.page.evaluate((maxBody) => {
+          const text = (document.body?.innerText || '').slice(0, maxBody);
+          const headings = Array.from(document.querySelectorAll('h1,h2,h3'))
+            .slice(0, 20)
+            .map(h => ({ tag: h.tagName.toLowerCase(), text: (h.textContent || '').trim().slice(0, 120) }))
+            .filter(h => h.text);
+          const links = Array.from(document.querySelectorAll('a[href]'))
+            .slice(0, 40)
+            .map(a => ({ text: (a.textContent || '').trim().slice(0, 80), href: a.getAttribute('href')?.slice(0, 200) || '' }))
+            .filter(l => l.text);
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"]'))
+            .slice(0, 30)
+            .map(b => (b.textContent || b.getAttribute('aria-label') || '').trim().slice(0, 80))
+            .filter(Boolean);
+          return { text, headings, links, buttons, url: location.href, title: document.title };
+        }, maxBody);
+        const newText = probe.text || '';
+        const delta = Math.abs(newText.length - this.lastPageText.length);
+        const changed = newText !== this.lastPageText && (delta >= minDelta || this.lastPageText === '');
+        if (changed) {
+          this.lastPageText = newText;
+          appendStreamEvent({
+            type: 'page_text',
+            ts: Date.now(),
+            sessionId: this.sessionId,
+            url: probe.url,
+            title: probe.title,
+            headings: probe.headings,
+            links: probe.links.slice(0, 20),
+            buttons: probe.buttons.slice(0, 15),
+            textTail: newText.slice(-1500),
+            textLength: newText.length,
+          });
+        }
+      } catch { /* page navigating / detached → next tick */ }
+    };
+    this.pageTextInterval = setInterval(tick, Math.max(500, intervalMs));
+    setImmediate(tick);
+  }
+
+  stopPageTextWatcher() {
+    if (this.pageTextInterval) {
+      clearInterval(this.pageTextInterval);
+      this.pageTextInterval = null;
+    }
+    this.pageTextWatching = false;
   }
 
   /**
@@ -253,17 +327,31 @@ export class Session {
       if (this.consoleMessages.length > this.maxConsoleSize) {
         this.consoleMessages.shift();
       }
+      appendStreamEvent({ type: 'console', sessionId: this.sessionId, ...entry });
     });
     page.on('pageerror', (err) => {
-      this.consoleMessages.push({
+      const entry = {
         ts: Date.now(),
         type: 'pageerror',
         text: String(err.message || err).slice(0, 1000),
         location: '',
         tabIndex: this.tabs.indexOf(page),
-      });
+      };
+      this.consoleMessages.push(entry);
       if (this.consoleMessages.length > this.maxConsoleSize) {
         this.consoleMessages.shift();
+      }
+      appendStreamEvent({ type: 'console', sessionId: this.sessionId, ...entry });
+    });
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) {
+        appendStreamEvent({
+          type: 'navigation',
+          ts: Date.now(),
+          sessionId: this.sessionId,
+          tabIndex: this.tabs.indexOf(page),
+          url: frame.url(),
+        });
       }
     });
   }
@@ -444,6 +532,7 @@ export class Session {
   async close() {
     if (this.recording) { this.recording = false; this.recordFrames = []; }
     await this.stopScreencast();
+    this.stopPageTextWatcher();
     if (this.visionInterval) {
       clearInterval(this.visionInterval);
       this.visionInterval = null;
