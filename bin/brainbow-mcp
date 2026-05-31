@@ -174,5 +174,61 @@ if [ "$AUTOOPEN_VIEWER" = "true" ] && [ ! -f "$VIEWER_FLAG" ]; then
   echo "[brainbow-mcp] viewer dispatched (background, $VIEWER_URL)" >&2
 fi
 
-# ─── Hand off to the MCP stdio server ──────────────────────────────────
-exec "$NODE_BIN" "$REPO_ROOT/src/mcp-server.js"
+# ─── Supervised hand-off to the MCP stdio server ───────────────────────
+# We do NOT `exec` directly. Instead we run mcp-server.js under a tiny
+# restart loop so that if the Node process EVER dies for a reason the
+# in-process never-die guards can't catch (OOM-killer, SIGSEGV in a native
+# addon, a dependency calling process.exit, a kernel signal), we respawn it
+# in-place with the SAME inherited stdio (fd 0/1/2 came from the MCP host).
+# The host's pipe to us stays open across the respawn, so from Claude's point
+# of view the tool surface never vanishes — the new child just picks up the
+# next JSON-RPC frame.
+#
+# The ONLY clean-exit code that should STOP the loop is 0 (the child observed
+# a real stdin EOF = the host genuinely disconnected; respawning would just
+# read EOF again and busy-loop). Any non-zero exit = a crash → respawn.
+#
+# A respawn-storm guard caps restarts to RESTART_MAX within RESTART_WINDOW so
+# a hard-broken build can't spin the CPU; past the cap we exit and let the
+# host's own MCP backoff take over.
+SUPERVISE="${BRAINBOW_MCP_SUPERVISE:-true}"
+RESTART_MAX="${BRAINBOW_MCP_RESTART_MAX:-20}"
+RESTART_WINDOW="${BRAINBOW_MCP_RESTART_WINDOW:-60}"
+
+if [ "$SUPERVISE" != "true" ]; then
+  exec "$NODE_BIN" "$REPO_ROOT/src/mcp-server.js"
+fi
+
+restart_count=0
+window_start=$(date +%s)
+while true; do
+  # Run in the foreground so it inherits our stdio (the host's pipes).
+  set +e
+  "$NODE_BIN" "$REPO_ROOT/src/mcp-server.js"
+  code=$?
+  set -e
+
+  if [ "$code" -eq 0 ]; then
+    echo "[brainbow-mcp] child exited 0 (clean host disconnect) — supervisor stopping" >&2
+    exit 0
+  fi
+
+  # Reset the restart window if it has elapsed.
+  now=$(date +%s)
+  if [ $((now - window_start)) -ge "$RESTART_WINDOW" ]; then
+    window_start=$now
+    restart_count=0
+  fi
+  restart_count=$((restart_count + 1))
+
+  echo "[brainbow-mcp] child crashed (exit $code) — respawn $restart_count/$RESTART_MAX in ${RESTART_WINDOW}s window" >&2
+  echo "[$(date '+%H:%M:%S.%3N')] [pid=$$] child crashed exit=$code respawn=$restart_count" >> "$TRACE_FILE" 2>/dev/null || true
+
+  if [ "$restart_count" -ge "$RESTART_MAX" ]; then
+    echo "[brainbow-mcp] respawn cap ($RESTART_MAX/${RESTART_WINDOW}s) hit — giving up so host backoff applies" >&2
+    exit "$code"
+  fi
+
+  # Small backoff so a tight crash loop doesn't peg a core.
+  sleep 0.5
+done

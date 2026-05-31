@@ -177,4 +177,64 @@ describe('Session', () => {
       session.broadcast = origBroadcast;
     }
   });
+
+  // ─── never-disconnect resilience (isAlive / ensureBrowser) ──────────────
+  // These pin the auto-recover contract the REST server's requireBrowser()
+  // relies on: a crashed Chromium must read as dead and relaunch silently
+  // instead of throwing "Target closed" deep in an async path (the old
+  // process-killer).
+
+  it('isAlive() is false with no browser', () => {
+    expect(session.browser).toBe(null);
+    expect(session.isAlive()).toBe(false);
+  });
+
+  it('isAlive() is true for a connected browser with an open page', () => {
+    session.browser = { isConnected: () => true };
+    session.page = { isClosed: () => false };
+    expect(session.isAlive()).toBe(true);
+  });
+
+  it('isAlive() is false when the browser is disconnected (crashed)', () => {
+    session.browser = { isConnected: () => false };
+    session.page = { isClosed: () => false };
+    expect(session.isAlive()).toBe(false);
+  });
+
+  it('isAlive() is false when the page is closed', () => {
+    session.browser = { isConnected: () => true };
+    session.page = { isClosed: () => true };
+    expect(session.isAlive()).toBe(false);
+  });
+
+  it('isAlive() swallows a throwing isConnected() and returns false', () => {
+    session.browser = { isConnected: () => { throw new Error('detached'); } };
+    session.page = { isClosed: () => false };
+    expect(session.isAlive()).toBe(false);
+  });
+
+  it('ensureBrowser() is a no-op (returns false) when already alive', async () => {
+    session.browser = { isConnected: () => true };
+    session.page = { isClosed: () => false };
+    let relaunched = false;
+    session.launch = async () => { relaunched = true; };
+    const did = await session.ensureBrowser();
+    expect(did).toBe(false);
+    expect(relaunched).toBe(false);
+  });
+
+  it('ensureBrowser() relaunches a dead browser and returns true', async () => {
+    // Half-dead remnant: a browser whose process crashed.
+    session.browser = { isConnected: () => false, close: async () => {} };
+    session.page = { isClosed: () => true };
+    let relaunchOpts = null;
+    session.close = async () => { session.browser = null; session.page = null; };
+    session.launch = async (opts) => { relaunchOpts = opts; };
+    const did = await session.ensureBrowser();
+    expect(did).toBe(true);
+    expect(relaunchOpts).toBeTruthy();
+    // preserves the prior viewport
+    expect(relaunchOpts.width).toBe(session.viewport.width);
+    expect(relaunchOpts.height).toBe(session.viewport.height);
+  });
 });

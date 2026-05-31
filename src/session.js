@@ -188,6 +188,42 @@ export class Session {
     }
   }
 
+  /**
+   * Is there a live, connected browser with a usable page right now?
+   * Puppeteer's browser.isConnected() flips false the instant the
+   * Chromium process dies — that's the authoritative liveness check
+   * (a non-null `this.page` can still be a dead handle after a crash).
+   */
+  isAlive() {
+    try {
+      return !!(this.browser && this.browser.isConnected() && this.page && !this.page.isClosed?.());
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Guarantee a usable browser before an action. If the browser crashed
+   * or was never launched, (re)launch transparently so callers never see
+   * a "Target closed" / "No browser open" error from a recoverable state.
+   * Preserves the last viewport + reopens the last URL when we have one.
+   * Returns true if a relaunch happened (caller may want to re-navigate).
+   */
+  async ensureBrowser(opts = {}) {
+    if (this.isAlive()) return false;
+    // Tear down any half-dead remnants before a clean relaunch.
+    if (this.browser) {
+      try { await this.close(); } catch { /* best effort */ }
+    }
+    this.log('ensure-browser', 'relaunching dead/absent browser');
+    await this.launch({
+      width: this.viewport.width,
+      height: this.viewport.height,
+      ...opts,
+    });
+    return true;
+  }
+
   async launch(opts = {}) {
     if (this.browser) await this.close();
 
@@ -224,6 +260,23 @@ export class Session {
         // Let Chromium keep cookies + local storage across runs.
         '--restore-last-session',
       ],
+    });
+
+    // Detect Chromium crashes / unexpected exits. In headless WSL2 the
+    // GPU/renderer process can OOM or hang and the browser disconnects.
+    // Without this listener the stale `this.browser`/`this.page` handles
+    // linger and the NEXT tool call throws "Target closed" deep inside an
+    // async path (which used to crash the unguarded server). Null the
+    // handles so isAlive() returns false and ensureBrowser() can relaunch
+    // transparently on the next call.
+    this.browser.on('disconnected', () => {
+      this.log('browser-disconnected', 'chromium exited/crashed — handles cleared, will relaunch on next use');
+      this.screencastRunning = false;
+      this.cdpSession = null;
+      this.browser = null;
+      this.page = null;
+      this.tabs = [];
+      this.stopPageTextWatcher();
     });
 
     const firstPage = (await this.browser.pages())[0] || await this.browser.newPage();
@@ -439,11 +492,15 @@ export class Session {
     try {
       this.cdpSession = await this.page.createCDPSession();
       this.cdpSession.on('Page.screencastFrame', async (params) => {
-        this.pushFrame(params.data);
-        this.broadcast({ type: 'frame', data: params.data });
+        // This whole callback runs detached from any request promise — an
+        // unhandled throw here becomes an unhandledRejection on the process.
+        // Belt-and-suspenders: wrap the entire body so a frame arriving
+        // after the page/CDP target died can never escalate to a crash.
         try {
-          await this.cdpSession.send('Page.screencastFrameAck', { sessionId: params.sessionId });
-        } catch { /* session closed */ }
+          this.pushFrame(params.data);
+          this.broadcast({ type: 'frame', data: params.data });
+          await this.cdpSession?.send('Page.screencastFrameAck', { sessionId: params.sessionId });
+        } catch { /* session/target closed mid-frame — drop it */ }
       });
       await this.cdpSession.send('Page.startScreencast', {
         format: 'jpeg',

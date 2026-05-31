@@ -58,8 +58,39 @@ if (BRAINBOW_TOKEN) {
   });
 } // If BRAINBOW_TOKEN not set, all requests pass through (backward compat for local dev)
 
+// ─── NEVER-DIE GUARDS (shared REST :4444) ──────────────────────────────
+// This is the ONE shared server every brainbow MCP shim proxies to. If it
+// exits, EVERY Claude loses ALL brainbow tools at once (every `fetch` from
+// every mcp-server.js fails). It must never die on a runtime throw.
+//
+// Real-world crash vectors this catches:
+//   • a `ws` socket emitting an 'error' event with no listener (the ws
+//     library re-throws those as uncaught exceptions),
+//   • an async CDP screencast callback rejecting after a Chromium crash,
+//   • a page-text-watcher / vision tick rejecting on a detached frame,
+//   • any provider/network reject that escaped a route's try/catch.
+// All of these are logged and SWALLOWED — the server keeps serving.
+process.on('uncaughtException', (err, origin) => {
+  try {
+    console.error(`[Brainbow] uncaughtException (${origin}) — staying up:`, err?.stack || err);
+  } catch { /* logging must never crash us */ }
+});
+process.on('unhandledRejection', (reason) => {
+  try {
+    console.error('[Brainbow] unhandledRejection — staying up:', reason?.stack || reason);
+  } catch { /* ignore */ }
+});
+
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+// An HTTP server 'error' event with no listener (e.g. a transient
+// ECONNRESET on a hung socket) would otherwise bubble to uncaughtException.
+server.on('clientError', (err, socket) => {
+  try { socket.destroy(); } catch { /* already gone */ }
+});
+server.on('error', (err) => {
+  console.error('[Brainbow] http server error (continuing):', err?.message || err);
+});
 
 // ─── SessionManager ─────────────────────────────────────────────────────────
 const MODE = process.env.BRAINBOW_MODE || 'local';
@@ -97,7 +128,22 @@ async function getSession(req, res) {
   }
 }
 
-function requireBrowser(session, res) {
+async function requireBrowser(session, res) {
+  // Auto-recover a crashed Chromium: if the browser died (WSL2 OOM, GPU
+  // hang, renderer crash) the next action used to throw "Target closed"
+  // deep in an async path. ensureBrowser() relaunches transparently so a
+  // recoverable crash never surfaces as a tool error. Only relaunch if a
+  // browser was previously launched (we don't want a bare /api/eval to
+  // silently spin up Chromium when the caller never launched one).
+  if (session.browser && !session.isAlive()) {
+    try {
+      await session.ensureBrowser();
+      session.log('auto-recover', 'browser was dead — relaunched before action');
+    } catch (e) {
+      res.status(503).json({ error: `Browser crashed and relaunch failed: ${e.message}` });
+      return false;
+    }
+  }
   if (!session.page) {
     res.status(400).json({ error: 'No browser open. POST /api/launch first.' });
     return false;
@@ -365,7 +411,7 @@ app.post('/api/close', async (req, res) => {
 app.get('/api/tabs', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const tabs = await session.listTabs();
     res.json({ tabs, count: tabs.length, sessionId: session.sessionId });
@@ -375,7 +421,7 @@ app.get('/api/tabs', async (req, res) => {
 app.post('/api/tabs/new', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { url, activate } = req.body || {};
     const result = await session.openTab({ url, activate });
@@ -386,7 +432,7 @@ app.post('/api/tabs/new', async (req, res) => {
 app.post('/api/tabs/switch', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { index } = req.body || {};
     if (typeof index !== 'number') {
@@ -400,7 +446,7 @@ app.post('/api/tabs/switch', async (req, res) => {
 app.post('/api/tabs/close', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { index } = req.body || {};
     if (typeof index !== 'number') {
@@ -414,7 +460,7 @@ app.post('/api/tabs/close', async (req, res) => {
 app.post('/api/goto', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { url, waitUntil = 'domcontentloaded' } = req.body;
     session.log('goto', url);
@@ -439,7 +485,7 @@ app.post('/api/goto', async (req, res) => {
 app.post('/api/resize', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { width, height } = req.body || {};
     if (!width || !height) {
@@ -465,7 +511,7 @@ app.post('/api/resize', async (req, res) => {
 app.post('/api/snapshot', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const result = await session.snapshot(req.body || {});
     res.json({ ...result, sessionId: session.sessionId });
@@ -474,7 +520,7 @@ app.post('/api/snapshot', async (req, res) => {
 app.get('/api/snapshot', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const result = await session.snapshot({});
     res.json({ ...result, sessionId: session.sessionId });
@@ -507,7 +553,7 @@ app.get('/api/snapshot', async (req, res) => {
 app.get('/api/observe', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const since = Number.parseInt(req.query.since || '0') || 0;
     const wantShot = req.query.screenshot === '1' || req.query.screenshot === 'true';
@@ -589,7 +635,7 @@ app.get('/api/tail', async (req, res) => {
 app.post('/api/wait-for', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   const started = Date.now();
   try {
     const { selector, text, textGone, urlPattern, networkIdle, timeout = 30000 } = req.body || {};
@@ -634,7 +680,7 @@ app.post('/api/wait-for', async (req, res) => {
 app.get('/api/console', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const level = String(req.query.level || '').toLowerCase();
     const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit || '200')));
@@ -659,7 +705,7 @@ app.get('/api/console', async (req, res) => {
 app.post('/api/reload', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { noCache = true } = req.body || {};
     session.log('reload', noCache ? 'hard (no-cache)' : 'soft');
@@ -677,7 +723,7 @@ app.post('/api/reload', async (req, res) => {
 app.post('/api/click', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { selector, text, x, y, button = 'left', timeout = 10000 } = req.body;
     if (x !== undefined && y !== undefined) {
@@ -701,7 +747,7 @@ app.post('/api/click', async (req, res) => {
 app.post('/api/type', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const {
       selector,
@@ -772,7 +818,7 @@ app.post('/api/type', async (req, res) => {
 const handleKey = async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { key } = req.body;
     session.log('key', key);
@@ -787,7 +833,7 @@ app.post('/api/keyboard', handleKey);
 app.post('/api/scroll', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { x = 0, y = 300, selector } = req.body;
     session.log('scroll', `dy=${y}`);
@@ -803,7 +849,7 @@ app.post('/api/scroll', async (req, res) => {
 app.post('/api/eval', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { script, expression } = req.body;
     const code = script || expression;
@@ -832,7 +878,7 @@ app.post('/api/eval', async (req, res) => {
 app.get('/api/pageinfo', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const text = await session.page.evaluate(() => document.body.innerText.substring(0, 2000));
     const url = session.page.url();
@@ -844,7 +890,7 @@ app.get('/api/pageinfo', async (req, res) => {
 app.post('/api/wait', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { selector, text, timeout = 15000 } = req.body;
     session.log('wait', selector || `text="${text}"`);
@@ -864,7 +910,7 @@ app.post('/api/wait', async (req, res) => {
 app.get('/api/page', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     res.json({ url: session.page.url(), title: await session.page.title(), viewport: session.page.viewport(), sessionId: session.sessionId });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -908,7 +954,7 @@ function downscaleWithFFmpeg(buf, maxWidth) {
 app.get('/api/screenshot', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const fullPage = req.query.full === 'true';
     const format = req.query.format || 'jpeg';
@@ -932,7 +978,7 @@ app.get('/api/screenshot', async (req, res) => {
 app.get('/api/frame', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     let b64 = session.lastFrameB64;
     if (!b64) {
@@ -954,7 +1000,7 @@ app.get('/api/frame', async (req, res) => {
 app.post('/api/text', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { selector } = req.body;
     const text = await session.page.$eval(selector, el => el.textContent);
@@ -965,7 +1011,7 @@ app.post('/api/text', async (req, res) => {
 app.post('/api/select', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { selector, value, label } = req.body;
     session.log('select', `${selector} = ${value || label}`);
@@ -977,7 +1023,7 @@ app.post('/api/select', async (req, res) => {
 app.post('/api/upload', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { selector, filePath } = req.body;
     session.log('upload', filePath);
@@ -990,7 +1036,7 @@ app.post('/api/upload', async (req, res) => {
 app.post('/api/dialog', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { action = 'accept', text } = req.body;
     session.page.once('dialog', async (dialog) => {
@@ -1011,7 +1057,7 @@ app.get('/api/log', async (req, res) => {
 app.post('/api/find', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const { selector, text } = req.body;
     if (text) {
@@ -1385,7 +1431,7 @@ app.post('/api/vision/stop', async (req, res) => {
 app.get('/api/screen', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const [text, title, url] = await Promise.all([
       session.page.evaluate(() => document.body.innerText.substring(0, 8000)),
@@ -1404,7 +1450,7 @@ app.get('/api/screen', async (req, res) => {
 app.get('/api/vision/full', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
-  if (!requireBrowser(session, res)) return;
+  if (!(await requireBrowser(session, res))) return;
   try {
     const [pageText, title, url] = await Promise.all([
       session.page.evaluate(() => document.body.innerText.substring(0, 5000)),
@@ -1485,9 +1531,22 @@ server.on('upgrade', (request, socket, head) => {
       return;
     }
     session.subscribe(ws);
-    if (session.lastFrameB64) ws.send(JSON.stringify({ type: 'frame', data: session.lastFrameB64 }));
-    ws.send(JSON.stringify({ type: 'log', entries: session.actionLog.slice(-20), sessionId }));
-    ws.send(JSON.stringify({ type: 'recording', state: session.recording ? 'started' : 'stopped' }));
+    // CRITICAL: a ws socket that emits 'error' with NO listener is re-thrown
+    // by the ws library as an uncaught exception → process exit. A viewer
+    // tab closing mid-frame, a network blip, or a 1006 abnormal close all
+    // emit 'error'. Listen + swallow so a dropped viewer can never take the
+    // shared REST server (and thus every Claude's brainbow tools) down.
+    ws.on('error', (err) => {
+      console.error(`[Brainbow:${sessionId}] viewer ws error (ignored):`, err?.message || err);
+    });
+    try {
+      if (session.lastFrameB64) ws.send(JSON.stringify({ type: 'frame', data: session.lastFrameB64 }));
+      ws.send(JSON.stringify({ type: 'log', entries: session.actionLog.slice(-20), sessionId }));
+      ws.send(JSON.stringify({ type: 'recording', state: session.recording ? 'started' : 'stopped' }));
+    } catch (e) {
+      // Socket may have closed between accept and first send.
+      console.error(`[Brainbow:${sessionId}] initial ws send failed (ignored):`, e?.message || e);
+    }
 
     ws.on('close', () => session.unsubscribe(ws));
 

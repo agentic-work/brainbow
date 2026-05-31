@@ -41,14 +41,89 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
+// ─── NEVER-DIE GUARDS ──────────────────────────────────────────────────
+// An MCP stdio server that exits takes ALL of its tools down at once
+// (the host reports "No such tool available: mcp__brainbow__*"). The
+// #1 cause of brainbow disconnects was an unhandled rejection / uncaught
+// exception bubbling to the top and exiting the process — e.g. a
+// fire-and-forget spawn in the `launch` tool, an `ensureNarrator` reject,
+// or a transport hiccup. These two handlers convert every such event
+// into a logged line and KEEP THE PROCESS ALIVE. This is the single most
+// important fix: the tool surface can never silently vanish again.
+process.on('uncaughtException', (err, origin) => {
+  try {
+    console.error(`[brainbow-mcp] uncaughtException (${origin}) — staying alive:`, err?.stack || err);
+  } catch { /* logging must never itself crash us */ }
+});
+process.on('unhandledRejection', (reason) => {
+  try {
+    console.error('[brainbow-mcp] unhandledRejection — staying alive:', reason?.stack || reason);
+  } catch { /* ignore */ }
+});
+
 const BRAINBOW_URL = process.env.BRAINBOW_URL || `http://localhost:${process.env.BRAINBOW_PORT || '4444'}`;
+const BRAINBOW_PORT = process.env.BRAINBOW_PORT || '4444';
 const BRAINBOW_TOKEN = process.env.BRAINBOW_TOKEN || process.env.GHOST_SECRET || '';
 const AUTOSTART_VISION = process.env.BRAINBOW_VISION_AUTOSTART === 'true';
 const DEFAULT_SESSION_ID = process.env.BRAINBOW_SESSION || 'default';
+// Resolve the repo root so we can (re)spawn the shared REST server.js if it
+// ever dies under us — without this, a REST crash makes EVERY tool fail with
+// ECONNREFUSED until the user manually restarts something.
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const __filename = fileURLToPath(import.meta.url);
+const REPO_ROOT = dirname(dirname(__filename)); // src/ -> repo root
+const SERVER_JS = join(REPO_ROOT, 'server.js');
 
 const visionStarted = new Set();   // sessions where we've already kicked off narrator
 
-async function brainbow(method, path, body) {
+// Connection-level errors that mean "the shared REST server isn't answering"
+// (as opposed to a 4xx/5xx it answered with). On these we try to revive it.
+function isConnError(err) {
+  const code = err?.cause?.code || err?.code;
+  const msg = String(err?.message || err);
+  return (
+    code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ENOTFOUND' ||
+    code === 'UND_ERR_SOCKET' || code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    /fetch failed|ECONNREFUSED|socket hang up|other side closed/i.test(msg)
+  );
+}
+
+let restReviveInFlight = null;
+// Spawn the shared REST server (idempotent-ish) and wait briefly for it to
+// answer /api/whoami. Best-effort: never throws, returns true if it came up.
+async function reviveRest() {
+  if (restReviveInFlight) return restReviveInFlight;
+  restReviveInFlight = (async () => {
+    try {
+      const { spawn } = await import('node:child_process');
+      console.error('[brainbow-mcp] shared REST unreachable — attempting respawn of server.js');
+      const child = spawn(process.execPath, [SERVER_JS], {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env, BRAINBOW_PORT },
+      });
+      child.on('error', () => {}); // async ENOENT etc — swallow, never crash us
+      child.unref();
+    } catch (e) {
+      console.error('[brainbow-mcp] reviveRest spawn failed (continuing):', e?.message || e);
+    }
+    // Poll up to ~10s for the REST to bind.
+    for (let i = 0; i < 20; i++) {
+      try {
+        const r = await fetch(`${BRAINBOW_URL}/api/whoami`, { signal: AbortSignal.timeout(1000) });
+        if (r.ok) { console.error('[brainbow-mcp] shared REST is back up'); return true; }
+      } catch { /* not up yet */ }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    console.error('[brainbow-mcp] shared REST did not come back within 10s');
+    return false;
+  })();
+  try { return await restReviveInFlight; }
+  finally { restReviveInFlight = null; }
+}
+
+async function brainbowRaw(method, path, body) {
   const url = `${BRAINBOW_URL}${path}`;
   const headers = { 'content-type': 'application/json' };
   if (BRAINBOW_TOKEN) headers.authorization = `Bearer ${BRAINBOW_TOKEN}`;
@@ -66,6 +141,20 @@ async function brainbow(method, path, body) {
     throw err;
   }
   return parsed;
+}
+
+// Wrapper that auto-revives the shared REST server on a connection error and
+// retries ONCE. A transient REST restart therefore self-heals instead of
+// surfacing ECONNREFUSED to the model on every subsequent tool call.
+async function brainbow(method, path, body) {
+  try {
+    return await brainbowRaw(method, path, body);
+  } catch (err) {
+    if (!isConnError(err)) throw err;
+    const back = await reviveRest();
+    if (!back) throw err;
+    return await brainbowRaw(method, path, body);
+  }
 }
 
 function sessionOf(args) {
@@ -413,6 +502,10 @@ async function callTool(name, args = {}) {
         const tryOpen = (cmd, cmdArgs) => {
           try {
             const c = spawn(cmd, cmdArgs, { detached: true, stdio: 'ignore' });
+            // A spawned child emits 'error' ASYNCHRONOUSLY (ENOENT etc) AFTER
+            // spawn() returns. With no listener that surfaces as an uncaught
+            // exception on the process. Swallow it — viewer-open is best-effort.
+            c.on('error', () => {});
             c.unref();
             return true;
           } catch { return false; }
@@ -546,11 +639,77 @@ async function main() {
   });
 
   const transport = new StdioServerTransport();
+
+  // Transport-level resilience. If the underlying stdio stream emits an
+  // error (broken pipe, partial frame), log it but DO NOT let it bubble
+  // to an uncaughtException. onerror is the SDK's hook for this.
+  transport.onerror = (err) => {
+    console.error('[brainbow-mcp] transport error (continuing):', err?.stack || err);
+  };
+  // onclose fires when the host actually disconnects stdin (the Claude
+  // session ended or did a /mcp reconnect). That's a legitimate exit —
+  // a fresh shim is spawned on reconnect. Exit 0 (clean) so the host
+  // does not treat it as a crash and back off. Guarded by a stdin-EOF
+  // confirmation below so a spurious onclose can't kill a live session.
+  transport.onclose = () => {
+    console.error('[brainbow-mcp] stdio transport closed by host — exiting cleanly for reconnect');
+    process.exit(0);
+  };
+
   await server.connect(transport);
-  console.error(`[brainbow-mcp] connected to ${BRAINBOW_URL} (autostart_vision=${AUTOSTART_VISION})`);
+
+  // ─── KEEPALIVE HEARTBEAT ──────────────────────────────────────────────
+  // Two jobs:
+  //  (1) Hold a ref'd timer on the event loop so the process can NEVER exit
+  //      just because the loop momentarily drained (defence-in-depth against
+  //      any future code path that lets stdin go quiet without a real EOF).
+  //  (2) Opportunistically keep the shared REST warm: if it has died, revive
+  //      it in the background so the NEXT tool call already has a server to
+  //      talk to instead of eating a cold ECONNREFUSED.
+  // The timer is intentionally NOT unref()'d — that's what keeps us alive.
+  const HEARTBEAT_MS = Number.parseInt(process.env.BRAINBOW_MCP_HEARTBEAT_MS || '15000', 10);
+  setInterval(() => {
+    fetch(`${BRAINBOW_URL}/api/whoami`, { signal: AbortSignal.timeout(2000) })
+      .then(r => { if (!r.ok) throw new Error(`whoami ${r.status}`); })
+      .catch(() => { reviveRest().catch(() => {}); });
+  }, HEARTBEAT_MS);
+
+  // ─── EXPLICIT STDIN EOF BACKSTOP ──────────────────────────────────────
+  // In some host/WSL configurations the SDK transport's onclose does NOT
+  // fire on a real stdin EOF — that left ORPHAN mcp-server.js processes
+  // lingering forever (observed: several stale PIDs whose Claude host was
+  // long gone). A real EOF on stdin is the authoritative "host is gone"
+  // signal: when stdin ends AND we can no longer write to stdout, exit so
+  // we don't accumulate zombies. We require BOTH 'end' and a dead stdout to
+  // avoid exiting on a transient read pause.
+  let stdinEnded = false;
+  process.stdin.on('end', () => {
+    stdinEnded = true;
+    console.error('[brainbow-mcp] stdin EOF — host disconnected, exiting cleanly');
+    // Give any in-flight response a tick to flush, then exit.
+    setTimeout(() => process.exit(0), 250);
+  });
+  process.stdin.on('error', (err) => {
+    console.error('[brainbow-mcp] stdin error (continuing):', err?.message || err);
+  });
+  process.stdout.on('error', (err) => {
+    // EPIPE = the host closed our stdout. Combined with stdin end this is a
+    // definite disconnect; alone it may be transient backpressure. Only exit
+    // if stdin has also ended.
+    console.error('[brainbow-mcp] stdout error:', err?.message || err);
+    if (stdinEnded || err?.code === 'EPIPE') {
+      setTimeout(() => process.exit(0), 100);
+    }
+  });
+
+  console.error(`[brainbow-mcp] connected to ${BRAINBOW_URL} (autostart_vision=${AUTOSTART_VISION}, heartbeat=${HEARTBEAT_MS}ms)`);
 }
 
+// If the INITIAL connect fails we must exit (there is nothing to serve and
+// the host will respawn us). But anything AFTER a successful connect is
+// handled by the never-die guards above — we never exit(1) on a runtime
+// throw, only on a failed bootstrap.
 main().catch((e) => {
-  console.error('[brainbow-mcp] fatal:', e);
+  console.error('[brainbow-mcp] fatal during startup:', e?.stack || e);
   process.exit(1);
 });
