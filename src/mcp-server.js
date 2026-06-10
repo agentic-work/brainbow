@@ -69,7 +69,7 @@ const DEFAULT_SESSION_ID = process.env.BRAINBOW_SESSION || 'default';
 // Resolve the repo root so we can (re)spawn the shared REST server.js if it
 // ever dies under us — without this, a REST crash makes EVERY tool fail with
 // ECONNREFUSED until the user manually restarts something.
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(__filename)); // src/ -> repo root
@@ -394,7 +394,19 @@ const TOOLS = [
     description: 'List all currently-running log tails.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'open_viewer',
+    description: 'Open the brainbow live viewer for this session in the user\'s default browser. The viewer no longer auto-opens on startup — call this when you (or the human) want the live window. Returns the viewer URL and which opener launched it.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string' } },
+    },
+  },
 ];
+
+// Exported so unit tests can assert the registered tool surface (e.g. that
+// `open_viewer` exists) without spinning up the stdio transport.
+export { TOOLS };
 
 async function callTool(name, args = {}) {
   const sessionId = sessionOf(args);
@@ -489,10 +501,10 @@ async function callTool(name, args = {}) {
       if (args.width) body.width = args.width;
       if (args.height) body.height = args.height;
       const data = await brainbow('POST', `/api/launch${qs}`, body);
-      // Auto-pop viewer window for this session — matches Playwright MCP UX
-      // (it pops a Chromium when invoked). Honors BRAINBOW_AUTOOPEN_VIEWER=false
-      // to disable.
-      if (process.env.BRAINBOW_AUTOOPEN_VIEWER !== 'false') {
+      // Bug 2: do NOT auto-pop the viewer on launch by default. The viewer is
+      // now opened ON DEMAND via the `open_viewer` tool. Opt back in to the
+      // old auto-pop-on-launch behavior with BRAINBOW_AUTOOPEN_VIEWER=true.
+      if (process.env.BRAINBOW_AUTOOPEN_VIEWER === 'true') {
         const baseUrl = process.env.BRAINBOW_URL || `http://localhost:${process.env.BRAINBOW_PORT || 4444}`;
         // Fall through to per-Claude default sessionId (BRAINBOW_SESSION env)
         // set by bin/brainbow-mcp so each Claude pops its OWN viewer tab.
@@ -607,6 +619,9 @@ async function callTool(name, args = {}) {
     case 'log_list':
       return [textBlock(await brainbow('GET', '/api/log/list'))];
 
+    case 'open_viewer':
+      return [textBlock(await brainbow('POST', `/api/viewer/open${qs}`, { sessionId }))];
+
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -709,7 +724,16 @@ async function main() {
 // the host will respawn us). But anything AFTER a successful connect is
 // handled by the never-die guards above — we never exit(1) on a runtime
 // throw, only on a failed bootstrap.
-main().catch((e) => {
-  console.error('[brainbow-mcp] fatal during startup:', e?.stack || e);
-  process.exit(1);
-});
+//
+// Only auto-start the stdio server when this file is the process entrypoint
+// (i.e. `node src/mcp-server.js`). When it is merely IMPORTED — e.g. a unit
+// test asserting the TOOLS surface — we must NOT connect a transport or wire
+// the stdin-EOF process.exit() backstop, which would tear down the test
+// worker. This is the standard ESM "is this the main module?" guard.
+const isEntrypoint = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntrypoint) {
+  main().catch((e) => {
+    console.error('[brainbow-mcp] fatal during startup:', e?.stack || e);
+    process.exit(1);
+  });
+}

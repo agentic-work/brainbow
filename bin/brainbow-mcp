@@ -12,9 +12,11 @@
 #     2. Picks a stable unique BRAINBOW_SESSION for this Claude (PPID-
 #        based + per-session cache, so /mcp reconnects within one
 #        Claude reuse the same session + browser window).
-#     3. Auto-opens the viewer at http://localhost:4444/?sessionId=<id>
-#        in the user's default browser — BACKGROUNDED so it never
-#        blocks the MCP-init race window.
+#     3. Does NOT auto-open the viewer by default (BRAINBOW_AUTOOPEN_VIEWER
+#        defaults to false). Open the live viewer ON DEMAND via the
+#        `open_viewer` MCP tool (POST /api/viewer/open) at
+#        http://localhost:4444/?sessionId=<id>. Set
+#        BRAINBOW_AUTOOPEN_VIEWER=true to restore auto-open on launch.
 #     4. Exec's into mcp-server.js for the stdio handshake.
 #
 #   Net result: human bookmarks ONE viewer URL (localhost:4444), each
@@ -31,7 +33,8 @@
 #   BRAINBOW_PORT                 port (default 4444 — shared across Claudes)
 #   BRAINBOW_SESSION              session ID (default: auto-derived per PPID)
 #   BRAINBOW_AUTOSTART_REST       'false' to skip REST autostart      — default 'true'
-#   BRAINBOW_AUTOOPEN_VIEWER      'false' to skip viewer auto-open    — default 'true'
+#   BRAINBOW_AUTOOPEN_VIEWER      'true' to auto-open viewer on launch — default 'false'
+#                                 (open on demand via the open_viewer MCP tool)
 #   BRAINBOW_VIEWER_OPENED_FLAG   marker file (don't reopen if exists)
 #                                 default $HOME/.cache/brainbow/.viewer-opened-once-<SESSION>
 #   BRAINBOW_VISION_AUTOSTART     vision narrator on first /api/live
@@ -93,7 +96,11 @@ export BRAINBOW_SESSION
 echo "[brainbow-mcp] session=$BRAINBOW_SESSION rest=$BASE_URL" >&2
 
 AUTOSTART_REST="${BRAINBOW_AUTOSTART_REST:-true}"
-AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-true}"
+# Bug 2: the viewer no longer AUTO-opens a (Windows) browser window on every
+# MCP/WSL start — that pop was unwanted. Default is now FALSE; the agent/human
+# opens it ON DEMAND via the `open_viewer` MCP tool (POST /api/viewer/open).
+# Set BRAINBOW_AUTOOPEN_VIEWER=true to restore the old auto-open behavior.
+AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-false}"
 # Viewer marker scoped per-session so each Claude opens its own viewer tab.
 VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened-once-$BRAINBOW_SESSION}"
 

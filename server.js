@@ -23,6 +23,8 @@ import { redactSecrets } from './src/redaction.js';
 import { Session } from './src/session.js';
 import { SessionManager } from './src/session-manager.js';
 import { registerLiveRoutes } from './src/live-routes.js';
+import { requireBrowser } from './src/require-browser.js';
+import { makeViewerOpenHandler } from './src/viewer-open.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number.parseInt(process.env.BRAINBOW_PORT || process.env.GHOST_PORT || '4444');
@@ -128,28 +130,12 @@ async function getSession(req, res) {
   }
 }
 
-async function requireBrowser(session, res) {
-  // Auto-recover a crashed Chromium: if the browser died (WSL2 OOM, GPU
-  // hang, renderer crash) the next action used to throw "Target closed"
-  // deep in an async path. ensureBrowser() relaunches transparently so a
-  // recoverable crash never surfaces as a tool error. Only relaunch if a
-  // browser was previously launched (we don't want a bare /api/eval to
-  // silently spin up Chromium when the caller never launched one).
-  if (session.browser && !session.isAlive()) {
-    try {
-      await session.ensureBrowser();
-      session.log('auto-recover', 'browser was dead — relaunched before action');
-    } catch (e) {
-      res.status(503).json({ error: `Browser crashed and relaunch failed: ${e.message}` });
-      return false;
-    }
-  }
-  if (!session.page) {
-    res.status(400).json({ error: 'No browser open. POST /api/launch first.' });
-    return false;
-  }
-  return true;
-}
+// requireBrowser() — the auto-recover guard run before every
+// browser-touching endpoint — lives in src/require-browser.js so it is
+// unit-testable without binding the REST port. It gates recovery on the
+// DURABLE session.wasLaunched flag (NOT session.browser, which the chromium
+// disconnect handler nulls), then RE-CHECKS session.page after any relaunch.
+// See src/require-browser.js for the full "session drops constantly" bug story.
 
 // ─── Vision config (process-wide) ───────────────────────────────────────────
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
@@ -383,6 +369,22 @@ app.get('/api/whoami', (req, res) => {
 app.get('/api/sessions', (req, res) => {
   res.json({ sessions: sessionManager.list(), mode: MODE });
 });
+
+/**
+ * POST /api/viewer/open  { sessionId? }
+ *
+ * Open the live viewer for a session in the user's default browser ON DEMAND.
+ * Bug 2: the viewer no longer auto-pops on MCP/WSL startup
+ * (BRAINBOW_AUTOOPEN_VIEWER now defaults false) — instead the agent or human
+ * calls this when they actually want the window. Runs the same opener chain
+ * the launcher used (wslview → cmd.exe → xdg-open → open). Returns
+ * { ok, url, opener }. When no opener is available, ok:false but the URL is
+ * still returned so a human can open it manually.
+ */
+app.post('/api/viewer/open', makeViewerOpenHandler({
+  port: PORT,
+  defaultSessionId: defaultViewerSessionId,
+}));
 
 // ─── REST API ───────────────────────────────────────────────────────────────
 

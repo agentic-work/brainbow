@@ -83,6 +83,17 @@ export class Session {
     this.cdpSession = null;
     this.screencastRunning = false;
 
+    // ─── Durable recovery state (survives a chromium disconnect) ──────────
+    // `wasLaunched` records that this session ever had a browser, so the REST
+    // requireBrowser() guard knows transparent relaunch is allowed even after
+    // the disconnect handler has nulled `this.browser`. `lastUrl` records the
+    // last successfully-navigated URL so ensureBrowser() relaunches BACK TO
+    // WHERE WE WERE — the persistent profile keeps cookies, so the web-app
+    // session stays valid and the user is NOT bounced to about:blank / re-SSO.
+    // The disconnect handler clears the dead handles but MUST NOT clear these.
+    this.wasLaunched = false;
+    this.lastUrl = null;
+
     // Frame state
     this.lastFrameB64 = null;
     this.frameBuffer = [];                 // recent N frames for catch-up
@@ -215,8 +226,11 @@ export class Session {
     if (this.browser) {
       try { await this.close(); } catch { /* best effort */ }
     }
-    this.log('ensure-browser', 'relaunching dead/absent browser');
+    this.log('ensure-browser', `relaunching dead/absent browser → ${this.lastUrl || 'about:blank'}`);
     await this.launch({
+      // Reopen WHERE WE WERE so a dropped chromium transparently comes back to
+      // the same page. Persistent profile means cookies survive → no re-login.
+      url: this.lastUrl || undefined,
       width: this.viewport.width,
       height: this.viewport.height,
       ...opts,
@@ -224,11 +238,27 @@ export class Session {
     return true;
   }
 
+  /**
+   * Actually spawn the puppeteer browser. Isolated into one method so unit
+   * tests can override it with a fake browser (via `_launchBrowserForTest`)
+   * and exercise launch()'s state-setting logic without a real Chromium.
+   */
+  async _launchBrowser(launchOpts) {
+    if (this._launchBrowserForTest) return this._launchBrowserForTest(launchOpts);
+    return puppeteer.launch(launchOpts);
+  }
+
   async launch(opts = {}) {
     if (this.browser) await this.close();
 
     const chromePath = findChrome();
     this.log('launch', `chrome=${chromePath} url=${opts.url || 'about:blank'}`);
+
+    // Mark the session as having been launched BEFORE the (possibly slow)
+    // browser spawn. This is the durable flag requireBrowser() gates recovery
+    // on — it must be set even if a later step (goto) throws, so a partial
+    // launch is still recoverable rather than reading as "never launched".
+    this.wasLaunched = true;
 
     const width = opts.width || this.viewport.width;
     const height = opts.height || this.viewport.height;
@@ -244,7 +274,7 @@ export class Session {
     try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
     this.log('profile', profileDir);
 
-    this.browser = await puppeteer.launch({
+    this.browser = await this._launchBrowser({
       executablePath: chromePath,
       headless: 'new',
       userDataDir: profileDir,
@@ -270,12 +300,18 @@ export class Session {
     // handles so isAlive() returns false and ensureBrowser() can relaunch
     // transparently on the next call.
     this.browser.on('disconnected', () => {
-      this.log('browser-disconnected', 'chromium exited/crashed — handles cleared, will relaunch on next use');
+      this.log('browser-disconnected', `chromium exited/crashed — handles cleared, will relaunch to ${this.lastUrl || 'about:blank'} on next use`);
       this.screencastRunning = false;
       this.cdpSession = null;
       this.browser = null;
       this.page = null;
       this.tabs = [];
+      // NOTE: deliberately do NOT clear wasLaunched / lastUrl here. Those are
+      // the DURABLE recovery state — clearing them is exactly the bug that
+      // defeated self-healing (requireBrowser saw browser=null and gave up,
+      // and a manual relaunch landed on about:blank → user logged out). The
+      // browser/page/cdp/tabs handles above ARE dead; the recovery intent is
+      // not.
       this.stopPageTextWatcher();
     });
 
@@ -287,7 +323,14 @@ export class Session {
 
     if (opts.url) {
       await this.page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // Record where we landed so a later disconnect can relaunch BACK here.
+      this.lastUrl = opts.url;
     }
+    // Capture the live URL (covers about:blank-less restores + any redirect).
+    try {
+      const landed = this.page.url();
+      if (landed && landed !== 'about:blank') this.lastUrl = landed;
+    } catch { /* page may be detaching — keep prior lastUrl */ }
 
     await this.startScreencast();
     this.startPageTextWatcher();
@@ -398,12 +441,19 @@ export class Session {
     });
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) {
+        const url = frame.url();
+        // Keep lastUrl tracking the ACTIVE tab's current page so a mid-session
+        // disconnect relaunches to where the user actually is, not just the
+        // initial launch URL. Ignore background tabs + about:blank.
+        if (page === this.page && url && url !== 'about:blank') {
+          this.lastUrl = url;
+        }
         appendStreamEvent({
           type: 'navigation',
           ts: Date.now(),
           sessionId: this.sessionId,
           tabIndex: this.tabs.indexOf(page),
-          url: frame.url(),
+          url,
         });
       }
     });
