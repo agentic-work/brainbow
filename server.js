@@ -244,7 +244,16 @@ function gifScaleFor(quality) {
 async function encodeRecording(frames, opts = {}) {
   const { format = 'gif', quality = 'high', speed = 1, zoom, filename } = opts;
   const ts = Date.now();
-  const outName = filename || `ghost-${ts}.${format}`;
+  // Derive a safe output name that ALWAYS carries the right extension.
+  // Bug fix (2026-06-16): a caller-supplied `filename` was used verbatim with
+  // NO extension, so ffmpeg could not infer the muxer and failed with exit 234
+  // ("use a standard extension or specify the format manually"). Strip any
+  // extension the caller added, sanitize to the /api/recordings/:name charset
+  // ([A-Za-z0-9._-]), then append the correct container extension.
+  let base = (filename && String(filename).trim()) || `ghost-${ts}`;
+  base = base.replace(/\.(mp4|webm|gif|png|jpe?g)$/i, '');
+  base = base.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '') || `ghost-${ts}`;
+  const outName = `${base}.${format}`;
   const outFile = path.join(RECORDINGS_DIR, outName);
 
   const tmpDir = path.join(os.tmpdir(), `ghost-encode-${ts}`);
@@ -1136,25 +1145,39 @@ app.post('/api/record/stop', async (req, res) => {
   if (!session.recording) return res.status(400).json({ error: 'Not recording' });
 
   const { format = 'gif', quality = 'high', speed = 1, filename } = req.body || {};
-  session.recording = false;
+  // Snapshot frames WITHOUT discarding the live buffer yet. Bug fix
+  // (2026-06-16): the buffer used to be cleared + `recording` flipped false
+  // BEFORE encode, so an encode failure (e.g. a bad filename) lost all frames
+  // and any retry hit the `!session.recording` guard with a 400. We now keep
+  // the recording session intact across encode and only release it on SUCCESS,
+  // so a failed encode can be retried against the same frames.
   const frames = [...session.recordFrames];
-  session.recordFrames = [];
   const zoom = session.recordZoom;
 
   session.broadcast({ type: 'recording', state: 'encoding', format, frameCount: frames.length });
   session.log('record-stop', `${frames.length} frames → ${format}`);
 
   if (frames.length === 0) {
+    session.recording = false;
+    session.recordFrames = [];
     return res.json({ ok: false, error: 'No frames captured', sessionId: session.sessionId });
   }
 
   try {
     const result = await encodeRecording(frames, { format, quality, speed, zoom, filename });
+    // Encode succeeded — now it is safe to release the recording session.
+    session.recording = false;
+    session.recordFrames = [];
+    session.recordZoom = null;
     session.broadcast({ type: 'recording', state: 'done', file: result.file, size: result.sizeHuman });
     res.json({ ok: true, ...result, sessionId: session.sessionId });
   } catch (e) {
+    // Keep `session.recording` true + the frame buffer intact so the caller can
+    // retry record_stop (e.g. with a corrected filename/format) without losing
+    // the captured frames.
     session.broadcast({ type: 'recording', state: 'error', error: e.message });
-    res.status(500).json({ error: `Encoding failed: ${e.message}` });
+    session.log('record-stop-error', `${e.message} — frames retained (${frames.length}), retry record_stop`);
+    res.status(500).json({ error: `Encoding failed: ${e.message}`, retryable: true, framesRetained: frames.length, sessionId: session.sessionId });
   }
 });
 
