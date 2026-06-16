@@ -402,6 +402,58 @@ const TOOLS = [
       properties: { sessionId: { type: 'string' } },
     },
   },
+  // ── Recording (AI-directed video clips) ──────────────────────────────────
+  // The REST record→encode pipeline (server.js encodeRecording: jpeg frame
+  // buffer → ffmpeg → mp4/webm/gif, fps derived from frame timestamps) already
+  // exists; these MCP tools make it drivable. Flow: record_start → drive the
+  // page (goto/click/type/scroll) → record_stop{format:'mp4'} returns the saved
+  // file PATH the agent can Read/cite. The recorded frames are the RAW CDP
+  // screencast (chrome-free), not the viewer window.
+  {
+    name: 'record_start',
+    description: 'Begin recording the live browser frame stream for this session into an in-memory buffer. Drive the page normally (goto/click/type/scroll) while recording, then call record_stop to encode an mp4. Optional `zoom` crops every frame to a rect (use for a tight action shot on one card/region). Errors if already recording.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Brainbow session id (defaults to "default")' },
+        zoom: {
+          type: 'object',
+          description: 'Optional crop rect (CSS px in the 1920x1200 viewport) applied to every frame at encode time — a static "zoomed-in" framing on a region. Omit for full viewport. For dynamic zoom/pan use the post-effects tools (Phase 2).',
+          properties: {
+            x: { type: 'number' }, y: { type: 'number' },
+            width: { type: 'number' }, height: { type: 'number' },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'record_stop',
+    description: 'Stop recording and encode the buffered frames into a video file via ffmpeg. Returns the saved file PATH (under the recordings dir), url, format, frameCount, duration, and human size — Read or cite the path. fps is derived from the real frame timestamps. Use format:"mp4" for website/social (H.264, default here), "webm" for web-native, "gif" for a muted loop.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Brainbow session id (defaults to "default")' },
+        format: { type: 'string', enum: ['mp4', 'webm', 'gif'], description: 'Output container/codec. Default mp4 (H.264).', default: 'mp4' },
+        quality: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Encode quality (CRF). Default high.', default: 'high' },
+        speed: { type: 'number', description: 'Playback speed multiplier applied at encode (2 = 2x faster, 0.5 = slow-motion). Default 1.', default: 1 },
+        filename: { type: 'string', description: 'Optional output basename (no extension). Auto-named by timestamp if omitted.' },
+      },
+    },
+  },
+  {
+    name: 'record_status',
+    description: 'Report whether a recording is in progress for this session, how many frames are buffered, elapsed ms, the active zoom rect, and whether ffmpeg is available. Use to confirm frames are accumulating before stopping.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string', description: 'Brainbow session id (defaults to "default")' } },
+    },
+  },
+  {
+    name: 'recordings_list',
+    description: 'List the encoded recordings saved on the brainbow server (filename, size, mtime) and the recordings directory path.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 // Exported so unit tests can assert the registered tool surface (e.g. that
@@ -621,6 +673,27 @@ async function callTool(name, args = {}) {
 
     case 'open_viewer':
       return [textBlock(await brainbow('POST', `/api/viewer/open${qs}`, { sessionId }))];
+
+    case 'record_start':
+      return [textBlock(await brainbow('POST', `/api/record/start${qs}`, {
+        sessionId,
+        ...(args.zoom ? { zoom: args.zoom } : {}),
+      }))];
+
+    case 'record_stop':
+      return [textBlock(await brainbow('POST', `/api/record/stop${qs}`, {
+        sessionId,
+        format: args.format ?? 'mp4',
+        ...(args.quality ? { quality: args.quality } : {}),
+        ...(typeof args.speed === 'number' ? { speed: args.speed } : {}),
+        ...(args.filename ? { filename: args.filename } : {}),
+      }))];
+
+    case 'record_status':
+      return [textBlock(await brainbow('GET', `/api/record/status${qs}`))];
+
+    case 'recordings_list':
+      return [textBlock(await brainbow('GET', '/api/recordings'))];
 
     default:
       throw new Error(`unknown tool: ${name}`);
