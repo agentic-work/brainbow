@@ -861,27 +861,41 @@ app.post('/api/eval', async (req, res) => {
   const session = await getSession(req, res);
   if (!session) return;
   if (!(await requireBrowser(session, res))) return;
+  const code = req.body.script || req.body.expression;
+  if (typeof code !== 'string' || !code.trim()) {
+    return res.status(400).json({ ok: false, error: 'eval requires a non-empty `script` string' });
+  }
+  session.log('eval', code.substring(0, 100));
+
+  // Wrap in an ASYNC IIFE so scripts can use top-level `await` (fetch, waits,
+  // async DOM probes) AND a top-level `return`. The prior wrapper was a plain
+  // `(() => { ... })()` arrow — any `await` was a SyntaxError, which silently
+  // fell through to a broken fallback that returned `undefined` (so the caller
+  // got `{ok:true}` with no `result`). Puppeteer awaits a returned Promise, so
+  // the async IIFE's resolved value is what we serialize back.
+  const wrappedAsync = `(async () => { ${code} })()`;
+  // Fallback: treat the script as a bare expression (`document.title`, `2+2`)
+  // with no `return` — wrap it as an async expression body.
+  const wrappedExpr = `(async () => (${code}))()`;
+
+  const tryEval = async (src) => session.page.evaluate(src);
+
   try {
-    const { script, expression } = req.body;
-    const code = script || expression;
-    session.log('eval', code?.substring(0, 100));
-    const wrappedCode = `(() => { ${code} })()`;
-    const result = await session.page.evaluate(wrappedCode);
-    res.json({ ok: true, result, sessionId: session.sessionId });
-  } catch (e) {
-    if (res.headersSent) return;
+    const result = await tryEval(wrappedAsync);
+    return res.json({ ok: true, result: result === undefined ? null : result, sessionId: session.sessionId });
+  } catch (e1) {
+    // statement-body compile failed (e.g. it was a bare expression) — retry as expression
     try {
-      const raw = req.body.script || req.body.expression;
-      const result = await session.page.evaluate(raw);
-      res.json({ ok: true, result, sessionId: session.sessionId });
-    } catch (error_) {
-      if (!res.headersSent) {
-        res.status(500).json({
-          ok: false,
-          error: e.message,
-          error_or: error_.message,
-        });
-      }
+      const result = await tryEval(wrappedExpr);
+      return res.json({ ok: true, result: result === undefined ? null : result, sessionId: session.sessionId });
+    } catch (e2) {
+      if (res.headersSent) return;
+      return res.status(500).json({
+        ok: false,
+        error: e1.message,
+        error_expr: e2.message,
+        hint: 'Script runs in an async function: use `await` freely and `return <value>` at the end (or pass a single bare expression).',
+      });
     }
   }
 });
@@ -1070,7 +1084,19 @@ app.post('/api/find', async (req, res) => {
   if (!session) return;
   if (!(await requireBrowser(session, res))) return;
   try {
-    const { selector, text } = req.body;
+    // Forgiveness: accept `query`/`q` as aliases for `text` (callers reach for
+    // a generic "query" param). Guard against BOTH missing — the old code fell
+    // straight into `$$eval(undefined)`, which threw the opaque
+    // "Cannot read properties of undefined (reading 'startsWith')" 500.
+    const selector = req.body.selector;
+    const text = req.body.text || req.body.query || req.body.q;
+    if (!selector && !text) {
+      return res.status(400).json({
+        ok: false,
+        error: 'find requires `selector` (a CSS selector) or `text` (visible text to match)',
+        sessionId: session.sessionId,
+      });
+    }
     if (text) {
       const results = await session.page.evaluate((searchText) => {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);

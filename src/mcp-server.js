@@ -306,14 +306,15 @@ const TOOLS = [
   },
   {
     name: 'eval',
-    description: 'Run JavaScript in the page context. Return the JSON-serializable result. Use for structural DOM probes when the built-in DOM counts are not enough.',
+    description: 'Run JavaScript in the page context and return the JSON-serializable result (always under `result`; null if the script returns nothing). The script runs inside an ASYNC function, so you can use top-level `await` (fetch, waits, async DOM probes) and end with `return <value>`. A single bare expression (e.g. `document.title`) also works. Use for structural DOM probes / page-side fetches when the built-in DOM counts are not enough.',
     inputSchema: {
       type: 'object',
       properties: {
         sessionId: { type: 'string' },
-        script: { type: 'string', description: 'JS to run. Will be wrapped in () => (...) so a single expression is fine. For multi-statement, write a function body and return at the end.' },
+        script: { type: 'string', description: 'JS to run in an async function. Use `await` freely; `return <value>` at the end, or pass a single expression. The returned value is JSON-serialized back to you. (Alias: `code`.)' },
+        code: { type: 'string', description: 'Alias for `script`.' },
       },
-      required: ['script'],
+      required: [],
     },
   },
   {
@@ -326,13 +327,14 @@ const TOOLS = [
   },
   {
     name: 'find',
-    description: 'Find an element by selector or visible text. Returns the bounding box, outerHTML snippet, and the index in the DOM.',
+    description: 'Find an element by CSS selector or visible text. Returns the bounding box, text snippet, and tag. You must pass `selector` OR `text` (alias `query`) — passing neither returns a clear 400 instead of crashing.',
     inputSchema: {
       type: 'object',
       properties: {
         sessionId: { type: 'string' },
-        selector: { type: 'string' },
-        text: { type: 'string', description: 'Visible text to match (exact-ish)' },
+        selector: { type: 'string', description: 'CSS selector to match' },
+        text: { type: 'string', description: 'Visible text to match (substring). Alias: `query`.' },
+        query: { type: 'string', description: 'Alias for `text` — visible text to match.' },
       },
     },
   },
@@ -630,8 +632,14 @@ async function callTool(name, args = {}) {
       return [textBlock(await brainbow('POST', `/api/wait-for${qs}`, body))];
     }
 
-    case 'eval':
-      return [textBlock(await brainbow('POST', `/api/eval${qs}`, { script: args.script }))];
+    case 'eval': {
+      // Accept `script`, or the common aliases `code`/`expression` (callers —
+      // and the host harness — reach for `code`). Previously only `args.script`
+      // was forwarded, so a `code`-named arg arrived EMPTY → the page ran
+      // nothing → `{ok:true}` with no result. This was THE eval-returns-nothing bug.
+      const evalScript = args.script ?? args.code ?? args.expression;
+      return [textBlock(await brainbow('POST', `/api/eval${qs}`, { script: evalScript }))];
+    }
 
     case 'snapshot':
       return [textBlock(await brainbow('POST', `/api/snapshot${qs}`, {}))];
@@ -639,7 +647,9 @@ async function callTool(name, args = {}) {
     case 'find': {
       const body = {};
       if (args.selector) body.selector = args.selector;
-      if (args.text) body.text = args.text;
+      // Accept `text`, or the forgiving `query`/`q` aliases.
+      const findText = args.text || args.query || args.q;
+      if (findText) body.text = findText;
       return [textBlock(await brainbow('POST', `/api/find${qs}`, body))];
     }
 
