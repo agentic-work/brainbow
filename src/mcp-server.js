@@ -71,11 +71,58 @@ const DEFAULT_SESSION_ID = process.env.BRAINBOW_SESSION || 'default';
 // ECONNREFUSED until the user manually restarts something.
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createRestLifecycle } from './rest-lifecycle.js';
+import { selectVisionModel } from './vision-model-select.js';
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(__filename)); // src/ -> repo root
 const SERVER_JS = join(REPO_ROOT, 'server.js');
 
 const visionStarted = new Set();   // sessions where we've already kicked off narrator
+
+// ─── CLAUDE-CODE OPUS-4.8 VISION DEFAULT ───────────────────────────────────
+// When launched from a Claude Code session and the operator hasn't pinned a
+// vision model, default the vision narrator to Opus 4.8 via the best creds
+// path (anthropic key → bedrock → honest local fallback + warning). The shim
+// (bin/brainbow-mcp) marks its OWN provider default with this sentinel so we
+// can tell "user asked for bedrock" apart from "launcher auto-defaulted".
+const AUTO_PROVIDER_SENTINEL = process.env.BRAINBOW_VISION_PROVIDER_AUTO || '';
+const visionDecision = selectVisionModel(process.env, {
+  autoProviderSentinel: AUTO_PROVIDER_SENTINEL,
+});
+if (visionDecision.provider && visionDecision.model && !visionDecision.explicit) {
+  // Apply the decision into the env the REST child inherits (it reads
+  // BRAINBOW_VISION_PROVIDER/MODEL on boot). Only when not explicitly pinned.
+  process.env.BRAINBOW_VISION_PROVIDER = visionDecision.provider;
+  process.env.BRAINBOW_VISION_MODEL = visionDecision.model;
+}
+if (visionDecision.warn) console.error(visionDecision.warn);
+console.error(
+  `[brainbow-mcp] vision: provider=${process.env.BRAINBOW_VISION_PROVIDER || '(default)'} ` +
+  `model=${process.env.BRAINBOW_VISION_MODEL || '(provider-default)'} ` +
+  `source=${visionDecision.source}`
+);
+
+// ─── MANAGED REST LIFECYCLE ────────────────────────────────────────────────
+// Owns the shared REST as a NON-detached child of THIS MCP process so it
+// starts WITH us and stops WITH us (refcount-guarded for the N-session case).
+const restLifecycle = createRestLifecycle({
+  serverJs: SERVER_JS,
+  port: BRAINBOW_PORT,
+  baseUrl: BRAINBOW_URL,
+});
+// 'false' → adopt-only (never spawn); default true → adopt-or-spawn managed.
+const REST_AUTOSTART = process.env.BRAINBOW_AUTOSTART_REST !== 'false';
+const visionEnvForChild = () => ({
+  BRAINBOW_VISION_PROVIDER: process.env.BRAINBOW_VISION_PROVIDER || '',
+  BRAINBOW_VISION_MODEL: process.env.BRAINBOW_VISION_MODEL || '',
+});
+let restStopped = false;
+async function stopRest(reason = 'exit') {
+  if (restStopped) return;
+  restStopped = true;
+  try { await restLifecycle.stop(); }
+  catch (e) { console.error('[brainbow-mcp] stopRest error:', e?.message || e); }
+}
 
 // Connection-level errors that mean "the shared REST server isn't answering"
 // (as opposed to a 4xx/5xx it answered with). On these we try to revive it.
@@ -90,34 +137,25 @@ function isConnError(err) {
 }
 
 let restReviveInFlight = null;
-// Spawn the shared REST server (idempotent-ish) and wait briefly for it to
-// answer /api/whoami. Best-effort: never throws, returns true if it came up.
+// Revive the shared REST through the MANAGED lifecycle (adopt-or-spawn,
+// NON-detached, owned by this MCP). Replaces the old detached `spawn(...,
+// {detached:true}) + unref()` orphan — a revived REST is now ALSO a managed
+// child that dies with us. Best-effort: never throws, returns true if up.
 async function reviveRest() {
   if (restReviveInFlight) return restReviveInFlight;
   restReviveInFlight = (async () => {
     try {
-      const { spawn } = await import('node:child_process');
-      console.error('[brainbow-mcp] shared REST unreachable — attempting respawn of server.js');
-      const child = spawn(process.execPath, [SERVER_JS], {
-        detached: true,
-        stdio: 'ignore',
-        env: { ...process.env, BRAINBOW_PORT },
-      });
-      child.on('error', () => {}); // async ENOENT etc — swallow, never crash us
-      child.unref();
+      // If we ASKED to stop (teardown), don't resurrect.
+      if (restStopped) return await restLifecycle.restUp();
+      console.error('[brainbow-mcp] shared REST unreachable — managed (re)start of server.js');
+      const r = await restLifecycle.start({ visionEnv: visionEnvForChild(), autostart: REST_AUTOSTART });
+      if (r.ok) { console.error('[brainbow-mcp] shared REST is back up'); return true; }
+      console.error('[brainbow-mcp] shared REST did not come back');
+      return false;
     } catch (e) {
-      console.error('[brainbow-mcp] reviveRest spawn failed (continuing):', e?.message || e);
+      console.error('[brainbow-mcp] reviveRest failed (continuing):', e?.message || e);
+      return false;
     }
-    // Poll up to ~10s for the REST to bind.
-    for (let i = 0; i < 20; i++) {
-      try {
-        const r = await fetch(`${BRAINBOW_URL}/api/whoami`, { signal: AbortSignal.timeout(1000) });
-        if (r.ok) { console.error('[brainbow-mcp] shared REST is back up'); return true; }
-      } catch { /* not up yet */ }
-      await new Promise(r => setTimeout(r, 500));
-    }
-    console.error('[brainbow-mcp] shared REST did not come back within 10s');
-    return false;
   })();
   try { return await restReviveInFlight; }
   finally { restReviveInFlight = null; }
@@ -456,13 +494,26 @@ const TOOLS = [
     description: 'List the encoded recordings saved on the brainbow server (filename, size, mtime) and the recordings directory path.',
     inputSchema: { type: 'object', properties: {} },
   },
+  // ── REST lifecycle + vision-model introspection ──────────────────────────
+  {
+    name: 'restart_rest',
+    description: 'Restart the shared brainbow REST server (the managed child of this MCP). Use this to pick up new server.js bytes after an update, or to clear a wedged REST. Honors the CURRENT BRAINBOW_VISION_PROVIDER/MODEL env (so a model change applies on restart). Returns {ok, owned, pid}. The REST is owned by this MCP and dies when this Claude session disconnects.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'vision_model',
+    description: 'Report the ACTIVE vision narrator provider + model id (and the Claude-Code default decision: whether Opus-4.8 is in use, and an honest warning if creds are missing). Use to confirm WHICH model is narrating the live screen.',
+    inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } } },
+  },
 ];
 
 // Exported so unit tests can assert the registered tool surface (e.g. that
-// `open_viewer` exists) without spinning up the stdio transport.
+// `open_viewer` exists) without spinning up the stdio transport. `callTool`
+// is exported so tests can drive a tool against a fake REST (echo server) and
+// assert the exact request body it forwards (e.g. the eval `code` alias).
 export { TOOLS };
 
-async function callTool(name, args = {}) {
+export async function callTool(name, args = {}) {
   const sessionId = sessionOf(args);
   const qs = `?sessionId=${encodeURIComponent(sessionId)}`;
 
@@ -705,6 +756,53 @@ async function callTool(name, args = {}) {
     case 'recordings_list':
       return [textBlock(await brainbow('GET', '/api/recordings'))];
 
+    case 'restart_rest': {
+      // Refresh the managed REST so new server.js bytes / a changed vision
+      // model take effect — and re-arm teardown for the new child.
+      restStopped = false;
+      const r = await restLifecycle.restart({ visionEnv: visionEnvForChild() });
+      return [textBlock({
+        ok: r.ok,
+        owned: r.owned,
+        pid: r.pid,
+        baseUrl: BRAINBOW_URL,
+        vision: {
+          provider: process.env.BRAINBOW_VISION_PROVIDER || null,
+          model: process.env.BRAINBOW_VISION_MODEL || null,
+        },
+      })];
+    }
+
+    case 'vision_model': {
+      // Pull the LIVE narration metadata from the REST (provider/model the
+      // running narrator actually bound) and combine it with this MCP's
+      // Claude-Code decision so the report is honest about creds.
+      let live = null;
+      try {
+        const data = await brainbow('GET', `/api/live${qs}&image=false&dom=false`);
+        live = data?.narration || null;
+      } catch { /* REST may be down; fall back to the MCP-side decision */ }
+      return [textBlock({
+        active: {
+          provider: process.env.BRAINBOW_VISION_PROVIDER || null,
+          model: process.env.BRAINBOW_VISION_MODEL || null,
+        },
+        liveNarration: live ? {
+          watching: live.watching,
+          model: live.model,
+          lastError: live.lastError,
+        } : null,
+        claudeCodeDecision: {
+          claudeCode: visionDecision.claudeCode,
+          explicit: visionDecision.explicit,
+          source: visionDecision.source,
+          reason: visionDecision.reason,
+          opus48: (process.env.BRAINBOW_VISION_MODEL || '').includes('opus-4-8'),
+          warning: visionDecision.warn || null,
+        },
+      })];
+    }
+
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -750,9 +848,27 @@ async function main() {
   // does not treat it as a crash and back off. Guarded by a stdin-EOF
   // confirmation below so a spurious onclose can't kill a live session.
   transport.onclose = () => {
-    console.error('[brainbow-mcp] stdio transport closed by host — exiting cleanly for reconnect');
-    process.exit(0);
+    console.error('[brainbow-mcp] stdio transport closed by host — tearing down managed REST, exiting cleanly');
+    // Kill the REST WE own (refcount-guarded — left running if other Claude
+    // sessions still own it) BEFORE we exit. Bounded so a slow kill can't
+    // hang the disconnect: stop() races a hard exit at 2.5s.
+    Promise.race([
+      stopRest('onclose'),
+      new Promise((r) => setTimeout(r, 2500)),
+    ]).finally(() => process.exit(0));
   };
+
+  // ─── MANAGED REST: start WITH the MCP ─────────────────────────────────
+  // Adopt-or-spawn the shared REST as a NON-detached child of this process,
+  // and install teardown traps so it dies WITH us on every exit path. This
+  // is the fix for the zombie REST: it now starts/stops exactly like the MCP.
+  restLifecycle.installTraps(process);
+  try {
+    const r = await restLifecycle.start({ visionEnv: visionEnvForChild(), autostart: REST_AUTOSTART });
+    console.error(`[brainbow-mcp] managed REST start: ok=${r.ok} owned=${r.owned} adopted=${r.adopted} pid=${r.pid ?? '-'}`);
+  } catch (e) {
+    console.error('[brainbow-mcp] managed REST start failed (will revive on demand):', e?.message || e);
+  }
 
   await server.connect(transport);
 
@@ -783,9 +899,13 @@ async function main() {
   let stdinEnded = false;
   process.stdin.on('end', () => {
     stdinEnded = true;
-    console.error('[brainbow-mcp] stdin EOF — host disconnected, exiting cleanly');
-    // Give any in-flight response a tick to flush, then exit.
-    setTimeout(() => process.exit(0), 250);
+    console.error('[brainbow-mcp] stdin EOF — host disconnected, tearing down managed REST + exiting');
+    // Tear down the REST we own (refcount-guarded) then exit. Race a hard
+    // exit so a slow kill never strands the process.
+    Promise.race([
+      stopRest('stdin-eof'),
+      new Promise((r) => setTimeout(r, 2500)),
+    ]).finally(() => process.exit(0));
   });
   process.stdin.on('error', (err) => {
     console.error('[brainbow-mcp] stdin error (continuing):', err?.message || err);
@@ -796,7 +916,10 @@ async function main() {
     // if stdin has also ended.
     console.error('[brainbow-mcp] stdout error:', err?.message || err);
     if (stdinEnded || err?.code === 'EPIPE') {
-      setTimeout(() => process.exit(0), 100);
+      Promise.race([
+        stopRest('stdout-epipe'),
+        new Promise((r) => setTimeout(r, 1500)),
+      ]).finally(() => process.exit(0));
     }
   });
 

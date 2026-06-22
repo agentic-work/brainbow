@@ -172,7 +172,11 @@ export function registerLiveRoutes(app, { sessionManager, getSession }) {
       logsDelta,                            // { tailName: [{ts,stream,line}, ...] }
       narration: {
         watching: !!session.visionWatching,
-        model: sharedVisionNarrator.modelId,
+        // BUGFIX: previously read a non-existent model-id getter (the real
+        // getter is `.model`), so /api/live (the keystone) returned undefined
+        // for the vision model. screen/live/vision_model all read this field.
+        provider: sharedVisionNarrator.providerName,
+        model: sharedVisionNarrator.model,
         lastError: session.visionError || null,
         latestBody: session.visionDescription || null,
         latestTs: session.visionTimestamp || 0,

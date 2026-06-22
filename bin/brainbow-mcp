@@ -104,41 +104,46 @@ AUTOOPEN_VIEWER="${BRAINBOW_AUTOOPEN_VIEWER:-false}"
 # Viewer marker scoped per-session so each Claude opens its own viewer tab.
 VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened-once-$BRAINBOW_SESSION}"
 
-# ─── Vision narrator: cloud by default, NEVER local GPU ────────────────
-export BRAINBOW_VISION_PROVIDER="${BRAINBOW_VISION_PROVIDER:-bedrock}"
-export BRAINBOW_VISION_MODEL="${BRAINBOW_VISION_MODEL:-us.anthropic.claude-haiku-4-5}"
+# ─── Vision narrator: provider/model selection ─────────────────────────
+# We DELEGATE the model decision to the Node MCP process (src/mcp-server.js
+# → selectVisionModel), which knows about Claude Code (CLAUDECODE=1) and the
+# best-available creds path (Opus-4.8 via anthropic key → bedrock → honest
+# local fallback). The shim only sets a SENTINEL default so the Node side can
+# tell "operator pinned a provider" apart from "shim auto-defaulted".
+#
+# If the operator EXPLICITLY exported BRAINBOW_VISION_PROVIDER, we honor it and
+# do NOT mark the sentinel (so the Node side treats it as an explicit pin).
+if [ -z "${BRAINBOW_VISION_PROVIDER:-}" ]; then
+  # Shim's own auto-default; the sentinel tells Node this was NOT operator-pinned.
+  export BRAINBOW_VISION_PROVIDER="bedrock"
+  export BRAINBOW_VISION_PROVIDER_AUTO="bedrock"
+fi
+# NOTE: we intentionally do NOT default BRAINBOW_VISION_MODEL here anymore —
+# leaving it unset lets selectVisionModel choose Opus-4.8 for Claude Code (or
+# the provider's own default otherwise). An explicit BRAINBOW_VISION_MODEL in
+# the env still wins (treated as an explicit pin by selectVisionModel).
 export BRAINBOW_VISION_AUTOSTART="${BRAINBOW_VISION_AUTOSTART:-false}"
 
-# ─── Auto-start shared REST if not up ──────────────────────────────────
-rest_up() { curl -fsS --max-time 1 "$BASE_URL/api/whoami" >/dev/null 2>&1; }
-
+# ─── REST lifecycle: OWNED BY THE NODE MCP PROCESS, not the shim ───────────
+# THE ZOMBIE-REST FIX. The shim used to spawn server.js with
+# `setsid nohup … & disown` — fully ORPHANED from both the shim and the MCP
+# host. When the host disconnected, the MCP exited but NOTHING signaled the
+# REST, so a REST started days ago kept listening on :4444, kept winning the
+# "is the port up?" short-circuit, and served stale bytes forever.
+#
+# Now the long-lived Node MCP process (src/mcp-server.js → createRestLifecycle)
+# does ADOPT-OR-SPAWN of the REST as a NON-detached, refcount-guarded child and
+# kills the one IT spawned when this Claude session disconnects. The shim must
+# NOT pre-spawn an orphan — it only forwards the autostart preference.
+#
+# We keep BRAINBOW_AUTOSTART_REST as the toggle (default true). It is exported
+# so the Node side honors it; setting it 'false' makes brainbow adopt an
+# externally-managed REST without ever spawning one.
+export BRAINBOW_AUTOSTART_REST="$AUTOSTART_REST"
 LOG_DIR="${BRAINBOW_LOG_DIR:-/tmp/brainbow}"
 LOG="${BRAINBOW_LOG_FILE:-${LOG_DIR}/brainbow-${PORT}.log}"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
-
-if [ "$AUTOSTART_REST" = "true" ] && ! rest_up; then
-  echo "[brainbow-mcp] REST not on $BASE_URL — spawning shared server.js (log: $LOG)..." >&2
-  setsid nohup env BRAINBOW_PORT="$PORT" "$NODE_BIN" "$REPO_ROOT/server.js" >>"$LOG" 2>&1 </dev/null &
-  SPAWNED_PID=$!
-  disown 2>/dev/null || true
-
-  rest_started=false
-  for i in $(seq 1 30); do
-    if rest_up; then
-      rest_started=true
-      echo "[brainbow-mcp] REST up on $BASE_URL (pid $SPAWNED_PID, took $((i / 2))s)" >&2
-      break
-    fi
-    sleep 0.5
-  done
-
-  if [ "$rest_started" = "false" ]; then
-    echo "[brainbow-mcp] FATAL: REST didn't bind $BASE_URL in 15s." >&2
-    echo "[brainbow-mcp] Server log tail (last 30 lines):" >&2
-    tail -30 "$LOG" 2>/dev/null >&2 || true
-    exit 1
-  fi
-fi
+echo "[brainbow-mcp] REST lifecycle owned by Node MCP (managed child, autostart=$AUTOSTART_REST)" >&2
 
 # ─── Auto-open viewer (BACKGROUNDED — never blocks MCP-init race) ──────
 # Viewer URL includes ?sessionId=… so this Claude's browser tab shows
