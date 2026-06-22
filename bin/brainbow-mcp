@@ -113,15 +113,24 @@ VIEWER_FLAG="${BRAINBOW_VIEWER_OPENED_FLAG:-$HOME/.cache/brainbow/.viewer-opened
 #
 # If the operator EXPLICITLY exported BRAINBOW_VISION_PROVIDER, we honor it and
 # do NOT mark the sentinel (so the Node side treats it as an explicit pin).
+#
+# DEFAULT = LOCAL OLLAMA + qwen2.5vl:7b (validated 2026-06-22, sharp+accurate
+# realtime narration of live sessions on the local 4090). Bedrock/Opus are NOT
+# reachable in this env (no API key, invalid AWS token), so the prior bedrock
+# default produced 100% auth errors. Local qwen2.5vl is sovereign (own GPU),
+# free, and actually reads the UI text correctly. An explicit
+# BRAINBOW_VISION_PROVIDER/MODEL in the env still overrides.
 if [ -z "${BRAINBOW_VISION_PROVIDER:-}" ]; then
-  # Shim's own auto-default; the sentinel tells Node this was NOT operator-pinned.
-  export BRAINBOW_VISION_PROVIDER="bedrock"
-  export BRAINBOW_VISION_PROVIDER_AUTO="bedrock"
+  export BRAINBOW_VISION_PROVIDER="ollama"
+  export BRAINBOW_VISION_PROVIDER_AUTO="ollama"
 fi
-# NOTE: we intentionally do NOT default BRAINBOW_VISION_MODEL here anymore —
-# leaving it unset lets selectVisionModel choose Opus-4.8 for Claude Code (or
-# the provider's own default otherwise). An explicit BRAINBOW_VISION_MODEL in
-# the env still wins (treated as an explicit pin by selectVisionModel).
+if [ -z "${BRAINBOW_OLLAMA_HOST:-}" ]; then
+  export BRAINBOW_OLLAMA_HOST="http://localhost:11434"
+fi
+if [ -z "${BRAINBOW_VISION_MODEL:-}" ]; then
+  # qwen2.5vl:7b — validated sharp/accurate; ~6GB on the local 4090.
+  export BRAINBOW_VISION_MODEL="qwen2.5vl:7b"
+fi
 export BRAINBOW_VISION_AUTOSTART="${BRAINBOW_VISION_AUTOSTART:-false}"
 
 # ─── REST lifecycle: OWNED BY THE NODE MCP PROCESS, not the shim ───────────
