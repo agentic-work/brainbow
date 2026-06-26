@@ -6,10 +6,10 @@
 //
 //   import { Brainbow } from '@agenticwork/brainbow';
 //   const bb = await Brainbow.launch({
-//     url: 'https://chat-dev.agenticwork.io',
+//     url: 'https://example.com',
 //     width: 1280, height: 800,
 //     vision: { provider: 'ollama', model: 'qwen2.5vl:7b', intervalMs: 1500 },
-//     logs: [{ name: 'api', command: 'kubectl logs -f deployment/agenticwork-api -n agentic-dev' }],
+//     logs: [{ name: 'api', command: 'kubectl logs -f deployment/my-api -n my-namespace' }],
 //   });
 //   const snap = await bb.observe();    // { image, narration, dom, console, logs, cursor }
 //   await bb.click({ selector: 'button.login' });

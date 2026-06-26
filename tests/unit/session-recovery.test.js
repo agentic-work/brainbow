@@ -32,7 +32,7 @@ describe('Session durable recovery state (Bug 1)', () => {
     // Drive launch() far enough to set the durable state WITHOUT a real
     // browser: stub the heavy bits launch() calls so we exercise the real
     // state-setting code paths.
-    const URL = 'https://chat-dev.agenticwork.io/app';
+    const URL = 'https://example.com/app';
 
     // Stub the browser-touching internals launch() invokes.
     session.close = async () => {};               // launch() calls close() if browser set (it isn't)
@@ -80,7 +80,7 @@ describe('Session durable recovery state (Bug 1)', () => {
 
   it('(3b) ensureBrowser() relaunches with the preserved lastUrl', async () => {
     session.wasLaunched = true;
-    session.lastUrl = 'https://chat-dev.agenticwork.io/app';
+    session.lastUrl = 'https://example.com/app';
     session.browser = null;
     session.page = null;
 
@@ -90,7 +90,7 @@ describe('Session durable recovery state (Bug 1)', () => {
     await session.ensureBrowser();
 
     expect(relaunchOpts).toBeTruthy();
-    expect(relaunchOpts.url).toBe('https://chat-dev.agenticwork.io/app');
+    expect(relaunchOpts.url).toBe('https://example.com/app');
     // viewport carried over too
     expect(relaunchOpts.width).toBe(session.viewport.width);
     expect(relaunchOpts.height).toBe(session.viewport.height);

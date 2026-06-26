@@ -415,7 +415,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         name: { type: 'string', description: 'A short name for this tail (e.g. "api", "k8s-pod"). Used as the key in `live` responses.' },
-        command: { type: 'string', description: 'Shell-tokenized command to spawn. Example: "kubectl logs -f deployment/agenticwork-api -n agentic-dev"' },
+        command: { type: 'string', description: 'Shell-tokenized command to spawn. Example: "kubectl logs -f deployment/my-api -n my-namespace"' },
       },
       required: ['name', 'command'],
     },
