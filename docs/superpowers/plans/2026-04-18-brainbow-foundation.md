@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Convert the renamed `agentic-work/brainbow` repo (forked from GhostPilot) into an OSS-licensed, test-harnessed, multi-session-ready foundation. After this plan: license is MIT, vitest is wired up with ≥70% coverage targeting, all module-global state lives in `Session`/`SessionManager` classes keyed by `sessionId`, every REST/WebSocket entry point accepts `sessionId` (default `"default"`), env vars are `BRAINBOW_*` with `GHOST_*` aliases for one release, the I1 (vision-can-see) and I2 (viewer-gets-frame) trip-wire tests are passing, and CI is green on SonarQube.
+**Goal:** Convert the renamed `agentic-work/brainbow` repo (forked from Brainbow) into an OSS-licensed, test-harnessed, multi-session-ready foundation. After this plan: license is MIT, vitest is wired up with ≥70% coverage targeting, all module-global state lives in `Session`/`SessionManager` classes keyed by `sessionId`, every REST/WebSocket entry point accepts `sessionId` (default `"default"`), env vars are `BRAINBOW_*` with `GHOST_*` aliases for one release, the I1 (vision-can-see) and I2 (viewer-gets-frame) trip-wire tests are passing, and CI is green on SonarQube.
 
 **Architecture:** server.js shrinks from a 1230-line monolith to a thin transport layer. Long-lived state moves into pure modules: `src/redaction.js`, `src/session.js`, `src/session-manager.js`. The existing single-browser singleton becomes `Map<sessionId, Session>` with a default key, so local UX is unchanged but cloud multi-tenancy can layer on. The tape engine, MCP server, and effects pipeline (Plans 2–4) all consume the `Session` interface — none of them touch globals.
 
@@ -31,8 +31,8 @@
 - `package.json` — add vitest devDeps, add `test` / `test:coverage` / `test:watch` scripts, drop `name` field for now (npm publish deferred), update description, drop `puppeteer-core` version pin notes
 - `server.js` — extract Session/SessionManager/redaction (becomes thin transport), accept `sessionId`, route `/ws/:sessionId`, swap env var names, update banner
 - `ui.html` — query `/api/whoami` at boot for sessionId, connect `/ws/{sessionId}`
-- `README.md` — rename to Brainbow, OSS posture, new banner, drop GhostPilot blurb (preserve credit line)
-- `CLAUDE.md` — update runner names `arc-ghostpilot` → `arc-brainbow`, project key references
+- `README.md` — rename to Brainbow, OSS posture, new banner, drop Brainbow blurb (preserve credit line)
+- `CLAUDE.md` — update runner names `arc-brainbow` → `arc-brainbow`, project key references
 - `sonar-project.properties` — uncomment `sonar.javascript.lcov.reportPaths=coverage/lcov.info`, add coverage exclusions
 - `.gitignore` — add `coverage/`, ensure `node_modules/` is in there
 
@@ -74,7 +74,7 @@ Create `LICENSE` with the standard MIT text:
 ```
 MIT License
 
-Copyright (c) 2026 Gnomus, Inc. and Brainbow contributors
+Copyright (c) 2026 Agenticwork LLC and Brainbow contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -102,7 +102,7 @@ git add LICENSE
 git commit -m "$(cat <<'EOF'
 chore(license): add MIT LICENSE at repo root
 
-Brainbow ships OSS under MIT (carried over from GhostPilot's package.json
+Brainbow ships OSS under MIT (carried over from Brainbow's package.json
 license field). Per-file proprietary headers removed in following commits.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -1658,9 +1658,9 @@ console.log(`
 `);
 ```
 
-Also replace any `[GhostPilot]` console.log prefixes with `[Brainbow]` (search: `grep -n "GhostPilot" server.js`).
+Also replace any `[Brainbow]` console.log prefixes with `[Brainbow]` (search: `grep -n "Brainbow" server.js`).
 
-Update the top docblock comment from `GhostPilot v2.0 — Shared Browser Control + Recording Studio` to `Brainbow v0.7.0 — Shared Browser + Cinematic Recording Studio`.
+Update the top docblock comment from `Brainbow v2.0 — Shared Browser Control + Recording Studio` to `Brainbow v0.7.0 — Shared Browser + Cinematic Recording Studio`.
 
 - [ ] **Step 2: Smoke-start to see the banner**
 
@@ -1676,7 +1676,7 @@ git add server.js
 git commit -m "$(cat <<'EOF'
 chore(rename): update server banner + log prefixes to Brainbow
 
-Boxed startup banner now reads B R A I N B O W v0.7.0. All [GhostPilot]
+Boxed startup banner now reads B R A I N B O W v0.7.0. All [Brainbow]
 console prefixes flipped to [Brainbow]. Top-of-file docblock updated.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -1713,7 +1713,7 @@ Replace the existing README.md content with:
 ```markdown
 <p align="center">
   <strong>Brainbow — Shared browser control + cinematic recording studio for AI agents.</strong><br />
-  Part of <a href="https://gnomus.ai">Gnomus.ai</a>
+  Part of <a href="https://agenticwork.io">agenticwork.io</a>
 </p>
 
 ---
@@ -1746,17 +1746,17 @@ This is the foundation milestone (`v0.7.0`). The legacy REST API works; the tape
 MIT — see [LICENSE](LICENSE). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 ```
 
-(Drop the GhostPilot-era REST API table, hero images, and demo links — they're outdated and the new docs land alongside the MCP server in Plan 3.)
+(Drop the Brainbow-era REST API table, hero images, and demo links — they're outdated and the new docs land alongside the MCP server in Plan 3.)
 
 - [ ] **Step 3: Update CLAUDE.md**
 
-The runbook still references `arc-ghostpilot`, `ghostpilot` SQ project, `GHOST_*` env vars, and an `integrations/openclaw/` skill that doesn't exist yet. Apply these substitutions globally in `CLAUDE.md`:
+The runbook still references `arc-brainbow`, `brainbow` SQ project, `GHOST_*` env vars, and an `integrations/openclaw/` skill that doesn't exist yet. Apply these substitutions globally in `CLAUDE.md`:
 
-- `GhostPilot` → `Brainbow`
-- `ghostpilot` → `brainbow` (in URLs, project keys, runner names — case-sensitive find/replace)
-- `arc-ghostpilot` → `arc-brainbow`
+- `Brainbow` → `Brainbow`
+- `brainbow` → `brainbow` (in URLs, project keys, runner names — case-sensitive find/replace)
+- `arc-brainbow` → `arc-brainbow`
 - `GHOST_PORT`, `GHOST_SECRET`, etc. → `BRAINBOW_PORT`, `BRAINBOW_TOKEN`, etc.
-- `GhostPilot is a Node.js app...` opening line → `Brainbow is a Node.js app...`
+- `Brainbow is a Node.js app...` opening line → `Brainbow is a Node.js app...`
 
 Keep all troubleshooting recipes intact — they're still correct.
 
@@ -1777,8 +1777,8 @@ docs(rename): rewrite README + CLAUDE.md + package.json for Brainbow
 
 README rewritten around the new positioning (always live-visible,
 cinematic tapes, multi-session, vision+HITL native). CLAUDE.md runbook
-substitutions: ghostpilot→brainbow everywhere, GHOST_*→BRAINBOW_*,
-arc-ghostpilot→arc-brainbow. package.json: drops name (npm deferred),
+substitutions: brainbow→brainbow everywhere, GHOST_*→BRAINBOW_*,
+arc-brainbow→arc-brainbow. package.json: drops name (npm deferred),
 bumps to v0.7.0, repo/homepage/bugs URLs flipped to brainbow.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -2039,7 +2039,7 @@ git commit -m "$(cat <<'EOF'
 ci(sonar): wire coverage report into SonarQube scan
 
 Enables sonar.javascript.lcov.reportPaths=coverage/lcov.info (was
-commented out in the GhostPilot bootstrap). Adds 'npm ci' + 'npm run
+commented out in the Brainbow bootstrap). Adds 'npm ci' + 'npm run
 test:coverage' steps to .github/workflows/sonar.yml so the LCOV report
 exists before the scanner runs. Sets coverage exclusions for ui.html,
 scripts/, tests/fixtures, *.config.js — these are all assets/data, not

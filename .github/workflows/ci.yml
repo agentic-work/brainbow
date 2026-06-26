@@ -45,4 +45,4 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64
           push: false
-          tags: ghostpilot:ci-${{ github.sha }}
+          tags: brainbow:ci-${{ github.sha }}

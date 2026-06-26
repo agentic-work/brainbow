@@ -8,13 +8,13 @@
 
 ## 0. Why this spec exists
 
-GhostPilot has been a successful local tool — "tell an AI coding agent to use GhostPilot to X" is a daily-use workflow. Three things now demand a reset:
+Brainbow has been a successful local tool — "tell an AI coding agent to use Brainbow to X" is a daily-use workflow. Three things now demand a reset:
 
 1. **Playwright MCP is consolidating the ecosystem.** v0.0.70 added `get_visible_html`, 143 device emulations, on-demand video, and Playwright v1.59 added `browser.bind()` and `page.screencast` "annotated video receipts." Microsoft also shipped `@playwright/cli` claiming 4× lower token use vs MCP. We need to stop being a niche REST app and become MCP-native to stay relevant.
 2. **The recording side is the real differentiator.** Playwright-flavored tools all do *playback recording* (raw video). Brainbow's job is *cinematic recordings* — declarative tape scripts, zoom regions, captions, mouse rings, post-hoc edits — the kind of GIF that ships with a release announcement, not a debugging trace.
 3. **Multi-platform consumption.** The same engine should be invokable as a Claude Code skill, an OpenClaw skill, a native agenticode tool, and a hosted MCP service inside the agentic platform — without rewriting the integration N times.
 
-This is also a rename: **GhostPilot → Brainbow** (named after a song by the user's band; ties into the Gnomus.ai brand alongside Synth).
+This is also a rename: **Brainbow → Brainbow** (named after a song by the user's band; ties into the agenticwork.io brand alongside Synth).
 
 ---
 
@@ -28,7 +28,7 @@ These are non-negotiable. Every change must preserve all of them.
 | I2 | **A human can see the live browser in real time.** WebSocket viewer streams CDP frames at ~30fps. Works on localhost and through k8s ingress. | The "shared browser" promise. The agent and the human watch the same pixels. |
 | I3 | **Every API call is keyed by `sessionId`.** Local mode auto-uses `"default"`; cloud mode requires the caller's session id. | Multi-session is designed in from day one. Adding it later means a rewrite. |
 | I4 | **The tape is the source of truth for any recording.** A recording produces a tape; an edit mutates a tape; a render replays a tape. No "render-only" output. | Tapes are diffable, replayable, LLM-editable. Renders are derivative. |
-| I5 | **Tool calls never leak secrets.** Bearer tokens, password fields, OAuth params, and JWTs are redacted in logs and broadcast frames before they ever leave the process. | Inherited from GhostPilot v2; tightened on rename. |
+| I5 | **Tool calls never leak secrets.** Bearer tokens, password fields, OAuth params, and JWTs are redacted in logs and broadcast frames before they ever leave the process. | Inherited from Brainbow v2; tightened on rename. |
 
 ---
 
@@ -355,10 +355,10 @@ Symlink installation (per CLAUDE.md): `ln -s "$(pwd)/integrations/claude-code/br
 
 ### 8.3 agenticode native tool — `agenticode/src/tools/BrainbowTool/`
 
-- **Rename** `GhostPilotTool` → `BrainbowTool` in `agenticode/src/tools/`. Keep `GhostPilotTool` as a re-export alias for one minor release so existing prompts don't error.
+- **Rename** `BrainbowTool` → `BrainbowTool` in `agenticode/src/tools/`. Keep `BrainbowTool` as a re-export alias for one minor release so existing prompts don't error.
 - **Extend** the action enum to include `tape_record_start`, `tape_record_stop`, `tape_run`, `tape_edit`, `describe`, `ask`. The new actions proxy through to `/api/tape/*` (REST) or to the local MCP server when bound.
-- **Update** the description prose to mention recording capability. Update the `IMPORTANT` line that today says "GhostPilot replaces all of them" → "Brainbow replaces all of them."
-- **Default URL** `process.env.BRAINBOW_URL || process.env.GHOSTPILOT_URL || 'http://localhost:4444'` — backwards-compat env var honored.
+- **Update** the description prose to mention recording capability. Update the `IMPORTANT` line that today says "Brainbow replaces all of them" → "Brainbow replaces all of them."
+- **Default URL** `process.env.BRAINBOW_URL || process.env.BRAINBOW_URL_LEGACY || 'http://localhost:4444'` — backwards-compat env var honored.
 
 ### 8.4 agentic platform service — `agentic/services/mcps/awp-brainbow-mcp/`
 
@@ -415,21 +415,21 @@ The repo currently has 0% coverage (per the CLAUDE.md runbook, this drags the So
 
 ---
 
-## 12. Migration from GhostPilot
+## 12. Migration from Brainbow
 
 1. Repo done: `agentic-work/brainbow` (private; flips to public once OSS-ready) created, history preserved.
-2. Old `agentic-work/ghostpilot` repo: archived with a README redirect ("This project moved to brainbow").
+2. Old `agentic-work/brainbow` repo: archived with a README redirect ("This project moved to brainbow").
 3. Code rename (in this repo):
    - `package.json`: name unset for now (npm publish deferred — see §13); description / repo / homepage updated to brainbow.
    - License: stays MIT (was already MIT in package.json + README). Drop the proprietary `.licenserc.yaml` + `license-check.yml` workflow + per-file `Proprietary and confidential` headers. Add `LICENSE` (MIT) at repo root and a single `SPDX-License-Identifier: MIT` comment per source file (lightweight, no skywalking-eyes enforcement).
    - Env vars: `GHOST_*` → `BRAINBOW_*`. Old names honored with a deprecation warning for one minor release.
    - Default port stays 4444.
    - Console banner, README, server.js comments updated.
-4. agenticode rename: `GhostPilotTool` → `BrainbowTool` with one-release alias.
+4. agenticode rename: `BrainbowTool` → `BrainbowTool` with one-release alias.
 5. Skill files written: `integrations/{openclaw,claude-code}/brainbow/SKILL.md`.
 6. agentic service: `services/mcps/awp-brainbow-mcp/` scaffolded.
 7. agentic Helm chart: `agentic/helm/brainbow/` added (StatefulSet, headless service, ingress, BRAINBOW_TOKEN secret, resource limits per §7.1).
-8. CI: ARC runner set renamed `arc-ghostpilot` → `arc-brainbow` (per runbook helm command). SonarQube project key updated to `brainbow`. Secrets `SONAR_TOKEN`, `SONAR_HOST_URL` set on the new repo.
+8. CI: ARC runner set renamed `arc-brainbow` → `arc-brainbow` (per runbook helm command). SonarQube project key updated to `brainbow`. Secrets `SONAR_TOKEN`, `SONAR_HOST_URL` set on the new repo.
 
 ---
 
@@ -452,7 +452,7 @@ The repo currently has 0% coverage (per the CLAUDE.md runbook, this drags the So
 | MCP image content blocks too large for some clients | `screen` tool returns max 300KB JPEG (existing logic); auto-shrink at quality 60→25→15→ffmpeg downscale (already implemented). |
 | Multi-session memory pressure | Per-session frame buffer capped at N frames (default 300); session idle timeout closes the browser after 10min of no activity. |
 | Vision model not installed | `describe` degrades gracefully with install hint; not a hard dependency. |
-| Existing GhostPilot users break on rename | One-release env-var aliases (`GHOST_*` honored); agenticode `GhostPilotTool` re-export; old REST endpoints stay as-is. |
+| Existing Brainbow users break on rename | One-release env-var aliases (`GHOST_*` honored); agenticode `BrainbowTool` re-export; old REST endpoints stay as-is. |
 
 ---
 
@@ -469,7 +469,7 @@ A v1 release is ready when **all** of these pass:
 7. SonarQube shows ≥70% coverage and Reliability A.
 8. OpenClaw skill installs and triggers (`openclaw skills list` shows brainbow).
 9. Claude Code skill installs and `/brainbow` appears in the slash-command menu.
-10. agenticode `BrainbowTool` (and `GhostPilotTool` alias) both resolve to the same code path.
+10. agenticode `BrainbowTool` (and `BrainbowTool` alias) both resolve to the same code path.
 11. **Cloud:** Helm chart deploys cleanly to a fresh namespace; a user can hit `brainbow.agenticwork.io/s/{sessionId}` and see a live browser driven by an MCP client running on a different machine; killing one pod takes down only the sessions on that pod, others are unaffected.
 12. **OSS readiness:** `LICENSE` (MIT) at root, no `Proprietary and confidential` headers remain in source, `README` reflects the OSS posture, `CONTRIBUTING.md` exists.
 

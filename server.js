@@ -269,7 +269,7 @@ async function encodeRecording(frames, opts = {}) {
   const inputFps = Math.max(Math.round(rawFps / speed), 1);
 
   if (!hasFFmpeg) {
-    const framesDir = path.join(RECORDINGS_DIR, `ghost-${ts}-frames`);
+    const framesDir = path.join(RECORDINGS_DIR, `brainbow-${ts}-frames`);
     fs.renameSync(tmpDir, framesDir);
     return {
       file: framesDir,
@@ -1543,8 +1543,7 @@ async function clickByText(session, text) {
 }
 
 // ─── Static UI ───────────────────────────────────────────────────────────────
-// Brand icon — new cropped brain+rainbow PNG. Legacy ghostpilot_logo
-// route kept for any external bookmarks that still reference it.
+// Brand icon — cropped brain+rainbow PNG.
 app.get('/brainbow-icon.png', (req, res) => {
   res.sendFile(path.join(__dirname, 'brainbow-icon.png'));
 });
@@ -1553,9 +1552,6 @@ app.get('/brainbow-icon-64.png', (req, res) => {
 });
 app.get('/brainbow.png', (req, res) => {
   res.sendFile(path.join(__dirname, 'brainbow.png'));
-});
-app.get('/ghostpilot_logo.png', (req, res) => {
-  res.sendFile(path.join(__dirname, 'brainbow-icon.png'));
 });
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'ui.html'));

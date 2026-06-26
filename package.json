@@ -2,6 +2,8 @@
   "name": "@agenticwork/brainbow",
   "version": "0.7.1",
   "description": "Brainbow — programmable shared browser + live-vision narrator. Apps embed via `Brainbow.launch()` (Playwright-style) or run the REST/MCP server.",
+  "license": "MIT",
+  "mcpName": "io.github.agentic-work/brainbow",
   "type": "module",
   "main": "./src/lib.js",
   "exports": {

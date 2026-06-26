@@ -54,8 +54,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 
 # ─── Locate a usable Node ──────────────────────────────────────────────
 for candidate in \
-    "/home/trent/.nvm/versions/node/v22.22.3/bin/node" \
-    "/home/trent/.nvm/versions/node/v24.13.1/bin/node" \
     "$(command -v node 2>/dev/null || true)"; do
   if [ -x "$candidate" ]; then NODE_BIN="$candidate"; break; fi
 done

@@ -57,7 +57,7 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"
           MAJOR="${VER%%.*}"
           MINOR="${VER%.*}"
-          REPO="us-east4-docker.pkg.dev/agenticwork-dev/companions/ghostpilot"
+          REPO="us-east4-docker.pkg.dev/agenticwork-dev/companions/brainbow"
           {
             echo "tag_v=$REPO:$GITHUB_REF_NAME"
             echo "tag_full=$REPO:$VER"
@@ -80,7 +80,7 @@ jobs:
             ${{ steps.docker_tags.outputs.tag_major }}
             ${{ steps.docker_tags.outputs.tag_latest }}
           labels: |
-            org.opencontainers.image.source=https://github.com/agentic-work/ghostpilot
+            org.opencontainers.image.source=https://github.com/agentic-work/brainbow
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.revision=${{ github.sha }}
 
