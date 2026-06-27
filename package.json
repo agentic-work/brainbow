@@ -36,11 +36,15 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^4.21.0",
     "puppeteer-core": "^24.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^1.6.0",
     "supertest": "^6.3.4",
     "vitest": "^1.6.0"
+  },
+  "overrides": {
+    "hono": "^4.12.25",
+    "basic-ftp": "^5.3.1"
   }
 }
