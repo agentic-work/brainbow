@@ -284,6 +284,25 @@ export class Session {
         '--disable-dev-shm-usage',
         `--window-size=${width},${height}`,
         '--disable-gpu',
+        // WebGL VIA SOFTWARE RASTERIZER. `--disable-gpu` alone leaves headless
+        // Chrome with NO WebGL context at all, so anything canvas-3d — three.js
+        // scenes, WebGL charts, globes — renders as a blank/black frame here
+        // while working fine in the user's real browser. Brainbow is the tool
+        // that judges whether a render is good; a class of render it can never
+        // display is a hole in the verdict, not a quirk.
+        //
+        // Measured on this box (chrome linux-146), same page, four flag sets:
+        //     --disable-gpu                       -> NO WEBGL
+        //     --enable-unsafe-swiftshader         -> OK (SwiftShader, Vulkan 1.3)
+        //     --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
+        //                                         -> OK
+        //     --disable-gpu + the three above     -> OK
+        // so `--disable-gpu` is KEPT (it is deliberate: the WSL2 GPU/renderer
+        // process OOMs and hangs — see the crash listener below) and software GL
+        // is added alongside it. "unsafe" here means unaccelerated, not insecure.
+        '--use-gl=angle',
+        '--use-angle=swiftshader',
+        '--enable-unsafe-swiftshader',
         '--disable-extensions',
         '--no-first-run',
         '--disable-default-apps',
