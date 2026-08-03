@@ -39,9 +39,9 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^1.6.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "supertest": "^6.3.4",
-    "vitest": "^1.6.0"
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "hono": "^4.12.25",
