@@ -251,8 +251,14 @@ export class Session {
   async launch(opts = {}) {
     if (this.browser) await this.close();
 
-    const chromePath = findChrome();
-    this.log('launch', `chrome=${chromePath} url=${opts.url || 'about:blank'}`);
+    // Resolve Chromium only when we are actually going to spawn one. When a test
+    // has supplied a fake browser via the `_launchBrowserForTest` seam (see
+    // _launchBrowser below), no real binary is needed — and calling findChrome()
+    // unconditionally here made the durable-recovery unit test fail on any
+    // machine or CI runner without Chromium installed, even though that test
+    // deliberately never launches a browser.
+    const chromePath = this._launchBrowserForTest ? null : findChrome();
+    this.log('launch', `chrome=${chromePath ?? 'stubbed'} url=${opts.url || 'about:blank'}`);
 
     // Mark the session as having been launched BEFORE the (possibly slow)
     // browser spawn. This is the durable flag requireBrowser() gates recovery
