@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1054.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^4.21.0",
     "puppeteer-core": "^24.0.0",
     "ws": "^8.21.0"
