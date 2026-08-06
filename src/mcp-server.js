@@ -73,6 +73,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createRestLifecycle } from './rest-lifecycle.js';
 import { selectVisionModel } from './vision-model-select.js';
+import * as term from './term-record.js';
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(__filename)); // src/ -> repo root
 const SERVER_JS = join(REPO_ROOT, 'server.js');
@@ -494,6 +495,75 @@ const TOOLS = [
     description: 'List the encoded recordings saved on the brainbow server (filename, size, mtime) and the recordings directory path.',
     inputSchema: { type: 'object', properties: {} },
   },
+  // ── Terminal recording ───────────────────────────────────────────────────
+  // The other half of brainbow: it already records the browser the agent is
+  // driving, this records the TERMINAL the agent is living in. "clear the
+  // screen and record this" becomes a GIF of that terminal doing it.
+  //
+  // Two capture paths, and the difference is honest rather than cosmetic:
+  //   attach  — inside tmux, tee the caller's OWN pane live. Literally this
+  //             terminal; catches output from tools the recorder never ran.
+  //   replay  — no tmux, so nothing can reach the parent PTY. Open a fresh one
+  //             with the caller's geometry/cwd/env and run the command there.
+  {
+    name: 'term_record',
+    description: 'Record a TERMINAL doing something and return a GIF (and optionally mp4/webm). Runs `command` in a fresh PTY sized to the CALLER\'s terminal, in the caller\'s cwd and environment, capturing real output — a failing command on camera is a valid recording. Set clear:true (default) to open on a blank screen. Use this when asked to "record" or "make a gif of" a terminal task. For capturing the agent\'s own live pane instead, see term_attach_start (needs tmux).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Shell command(s) to run on camera. Use ; or && to chain. Required.' },
+        cwd: { type: 'string', description: 'Working directory. Defaults to the MCP process cwd.' },
+        clear: { type: 'boolean', description: 'Clear the screen first so the recording opens clean. Default true.', default: true },
+        formats: { type: 'array', items: { type: 'string', enum: ['gif', 'mp4', 'webm'] }, description: 'Outputs to produce. Default ["gif"].' },
+        theme: { type: 'string', description: 'Colour theme: gnomus (default, warm paper on near-black), dracula, monokai, solarized, asciinema, or a custom agg theme string.' },
+        fontSize: { type: 'number', description: 'Font size in px. Default 16.' },
+        speed: { type: 'number', description: 'Playback speed multiplier applied at render (2 = twice as fast). Default 1.' },
+        fpsCap: { type: 'number', description: 'Frame rate cap. Default 24.' },
+        idleLimit: { type: 'number', description: 'Seconds of dead air to compress any single pause down to. Default 2 — set higher to keep real waiting time.' },
+        cols: { type: 'number', description: 'Override columns. Defaults to the detected terminal width.' },
+        rows: { type: 'number', description: 'Override rows. Defaults to the detected terminal height.' },
+        filename: { type: 'string', description: 'Output basename (no extension). Auto-named by timestamp if omitted.' },
+        title: { type: 'string', description: 'Title stored in the asciicast.' },
+        timeoutMs: { type: 'number', description: 'Kill the recording after this long. Default 900000 (15 min).' },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'term_attach_start',
+    description: 'Start recording the CALLER\'S OWN terminal pane live (requires the agent to be running inside tmux). Everything the pane prints from now on is captured, including output from tools this recorder did not run — this is the real "record the session I am in". Then do the work normally and call term_attach_stop. Errors with an explanation if not inside tmux; use term_record instead in that case.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Recording slot id (defaults to "default")' },
+        pane: { type: 'string', description: 'tmux pane id to capture. Defaults to the caller\'s current pane.' },
+        filename: { type: 'string', description: 'Output basename (no extension).' },
+      },
+    },
+  },
+  {
+    name: 'term_attach_stop',
+    description: 'Stop the live pane capture, assemble the asciicast and render it. Returns the saved GIF (and mp4/webm if asked) with paths, sizes and the recordings dir.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Recording slot id (defaults to "default")' },
+        formats: { type: 'array', items: { type: 'string', enum: ['gif', 'mp4', 'webm'] }, description: 'Outputs to produce. Default ["gif"].' },
+        theme: { type: 'string' },
+        fontSize: { type: 'number' },
+        speed: { type: 'number' },
+        fpsCap: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'term_status',
+    description: 'Report terminal-recording capability and state: which binaries are present (asciinema, agg, ffmpeg, tmux), whether the caller is inside tmux (and so whether live attach is possible), the detected controlling TTY and its size, and any capture in progress.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string' } },
+    },
+  },
   // ── REST lifecycle + vision-model introspection ──────────────────────────
   {
     name: 'restart_rest',
@@ -735,6 +805,31 @@ export async function callTool(name, args = {}) {
     case 'open_viewer':
       return [textBlock(await brainbow('POST', `/api/viewer/open${qs}`, { sessionId }))];
 
+    case 'term_record': {
+      const { command, formats = ['gif'], ...rest } = args;
+      const res = await term.record({ command, formats, ...rest });
+      return {
+        ...res,
+        note: res.mode === 'replay'
+          ? 'Captured in a fresh PTY matching this terminal\'s size, cwd and environment. Not the agent\'s own pane — run the agent inside tmux and use term_attach_start for that.'
+          : undefined,
+      };
+    }
+    case 'term_attach_start':
+      return term.attachStart(args);
+    case 'term_attach_stop': {
+      const { sessionId: sid, formats = ['gif'], ...render } = args;
+      const stopped = term.attachStop({ sessionId: sid });
+      const outputs = await term.renderFromCast(stopped.cast, { formats, ...render });
+      return { ...stopped, outputs, dir: term.RECORDINGS_DIR };
+    }
+    case 'term_status':
+      return {
+        capabilities: term.capabilities(),
+        terminal: term.detectTerminal(),
+        capture: term.attachStatus(args),
+        dir: term.RECORDINGS_DIR,
+      };
     case 'record_start':
       return [textBlock(await brainbow('POST', `/api/record/start${qs}`, {
         sessionId,
