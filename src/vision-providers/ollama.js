@@ -28,6 +28,10 @@ export function createOllamaProvider({
         prompt: `${system}\n\n${user}`,
         images: [imageB64],
         stream: false,
+        // Release the model from VRAM immediately after each call. brainbow is
+        // intermittent, so it must never hold the GPU resident when idle
+        // (user direction 2026-06-22: "if not being used it cant be in memory").
+        keep_alive: 0,
         options: { num_predict: numPredict, temperature: 0.2 },
       };
       const res = await fetch(`${host}/api/generate`, {
